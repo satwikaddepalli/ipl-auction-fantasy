@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1456,48 +1457,72 @@ let controlRoomLeagueId = null;
 
 async function goToAuctionSetup(lgId){
   if(!CU||CU.role!=='admin'){showToast('Admin only','error');return;}
-  // Ensure LEAGUES_DB is populated
-  if(!LEAGUES_DB.length){
-    try{ LEAGUES_DB=await sbGetMyLeagues(); }catch(e){}
-  }
+  if(!LEAGUES_DB.length){ try{ LEAGUES_DB=await sbGetMyLeagues(); }catch(e){} }
   const adminLeagues=LEAGUES_DB.filter(lg=>lg.adminId===CU.id);
   const targetLg = lgId
     ? (LEAGUES_DB.find(x=>x.id===lgId) || adminLeagues[0])
     : adminLeagues[0];
-  if(!targetLg){
-    showToast('No leagues found. Create a league first.','info');
-    showCreateModal();
-    return;
-  }
+  if(!targetLg){ showToast('Create a league first','info'); showCreateModal(); return; }
   controlRoomLeagueId = targetLg.id;
-  // Completed auction → jump straight to summary
-  if(LEAGUE_AUCTIONS[targetLg.id]&&LEAGUE_AUCTIONS[targetLg.id].completed){
-    const saved=LEAGUE_AUCTIONS[targetLg.id];
-    aucConfig=saved.config; aucMgrs=saved.mgrs; aucSold=saved.sold;
-    aucUnsold=saved.unsold; aucQueue=saved.queue;
-    document.getElementById('auc-league-name').textContent=aucConfig.leagueName;
-    document.getElementById('a-sold-badge').textContent=aucSold+' Sold';
-    document.getElementById('a-unsold-badge').textContent=aucUnsold+' Unsold';
-    showAucScreen('summary'); showS('s-auction'); return;
+
+  // ALWAYS check Supabase for the current auction state (fixes refresh + sync issues)
+  const {data:aucRow} = await sb.from('auctions')
+    .select('id,status,state_json')
+    .eq('league_id', targetLg.id)
+    .order('created_at',{ascending:false})
+    .limit(1)
+    .maybeSingle();
+
+  if(aucRow){
+    if(aucRow.status==='completed'){
+      // Restore from saved state
+      await restoreAuctionState(aucRow, targetLg);
+      showAucScreen('summary'); showS('s-auction'); return;
+    }
+    if(aucRow.status==='live'||aucRow.status==='paused'){
+      await restoreAuctionState(aucRow, targetLg);
+      showAucScreen('live'); showS('s-auction');
+      subscribeAdminToAuction();
+      return;
+    }
   }
-  // In-progress auction → resume
-  if(LEAGUE_AUCTIONS[targetLg.id]&&LEAGUE_AUCTIONS[targetLg.id].inProgress){
-    const saved=LEAGUE_AUCTIONS[targetLg.id];
-    aucConfig=saved.config; aucMgrs=saved.mgrs; aucQueue=saved.queue;
-    aucIdx=saved.idx; aucBid=saved.bid; aucTop=saved.top;
-    aucSold=saved.sold; aucUnsold=saved.unsold; aucLogs=saved.logs||[];
-    document.getElementById('auc-league-name').textContent=aucConfig.leagueName;
-    document.getElementById('a-sold-badge').textContent=aucSold+' Sold';
-    document.getElementById('a-unsold-badge').textContent=aucUnsold+' Unsold';
-    renderQueueList(); renderBiddersBar();
-    if(aucIdx>=0&&aucIdx<aucQueue.length) renderAucCenter(aucQueue[aucIdx]);
-    showAucScreen('live'); showS('s-auction'); return;
-  }
-  // Show control room
+
+  // No auction yet — show control room setup
   showS('s-auction-setup');
   updateTier(0,5); updateTier(1,2); updateTier(2,2); updateTier(3,2);
   await renderControlRoom(targetLg);
-  await filterPP('ALL',null);  // must await — async fetch
+  await filterPP('ALL',null);
+}
+
+async function restoreAuctionState(aucRow, lg){
+  // Restore full auction state from Supabase state_json
+  const state = aucRow.state_json || {};
+  aucConfig = state.config || {
+    leagueName:lg.name, leagueId:lg.id, auctionId:aucRow.id,
+    budget:lg.budget_per_team||100, squad:lg.max_squad_size||16,
+    timer:lg.auction_timer_secs||30, maxTeam:5
+  };
+  aucConfig.auctionId = aucRow.id;
+  aucMgrs   = state.mgrs   || [];
+  aucQueue  = state.queue  || [];
+  aucIdx    = state.idx    ?? -1;
+  aucBid    = state.bid    || 0;
+  aucTop    = state.top    || null;
+  aucSold   = state.sold   || 0;
+  aucUnsold = state.unsold || 0;
+  aucLogs   = state.logs   || [];
+  aucPaused = aucRow.status==='paused';
+
+  document.getElementById('auc-league-name').textContent = aucConfig.leagueName;
+  document.getElementById('a-sold-badge').textContent    = aucSold+' Sold';
+  document.getElementById('a-unsold-badge').textContent  = aucUnsold+' Unsold';
+
+  renderQueueList();
+  renderBiddersBar();
+  if(aucIdx>=0&&aucIdx<aucQueue.length) renderAucCenter(aucQueue[aucIdx]);
+  // Restore log display
+  const logBody=document.getElementById('log-body');
+  if(logBody) logBody.innerHTML=aucLogs.slice(0,60).map(l=>`<div class="le ${l.type}"><div>${l.text}</div><div class="le-time">${l.time}</div></div>`).join('');
 }
 
 async function renderControlRoom(lg){
@@ -1762,6 +1787,20 @@ async function launchAuction(){
 }
 
 
+
+async function saveAuctionState(status){
+  if(!aucConfig.auctionId) return;
+  const state = {
+    config:aucConfig, mgrs:aucMgrs, queue:aucQueue,
+    idx:aucIdx, bid:aucBid, top:aucTop,
+    sold:aucSold, unsold:aucUnsold, logs:aucLogs.slice(0,100)
+  };
+  await sb.from('auctions').update({
+    status: status||'live',
+    state_json: state
+  }).eq('id',aucConfig.auctionId);
+}
+
 function subscribeAdminToAuction(){
   // Unsubscribe any existing admin channel
   if(window._adminAucChannel){
@@ -1771,27 +1810,44 @@ function subscribeAdminToAuction(){
   if(!aucConfig.auctionId) return;
 
   window._adminAucChannel = sb.channel('admin-auction-'+aucConfig.auctionId)
-    // FIX 1: Manager bids → update admin bid display + bidder pills
+    // Listen for manager bids → update admin control room live
     .on('postgres_changes',{
       event:'INSERT', schema:'public', table:'auction_bids',
       filter:'auction_id=eq.'+aucConfig.auctionId
     }, async (payload)=>{
       const bid = payload.new;
       if(!bid.is_winning) return;
-      // Find which manager placed this bid
       const m = aucMgrs.find(x=>x.id===bid.bidder_id);
       if(!m) return;
-      // Update admin-side state
+      // Update admin state
       aucBid = parseFloat(bid.amount);
       aucTop = bid.bidder_id;
-      // Reset timer to 20s on new bid (same as local placeBid)
+      // Update manager local budget for display
+      m.budget = parseFloat((m.budget - 0).toFixed(2)); // actual deduction on sold
       startAucTimer(Math.min(20,aucConfig.timer));
-      // FIX 2: Add to admin auction log
       addLog('bid', m.name+' bid ₹'+bid.amount+'cr');
-      // Update admin UI
       renderAucBidDisplay();
       renderBiddersBar();
       const sb2=document.getElementById('sell-now-btn');if(sb2)sb2.disabled=false;
+      // FIX 5: Save shared log state so managers see this bid in their log too
+      saveAuctionState('live');
+    })
+    // FIX 5: Listen for state updates (paused/resumed/log changes) → sync manager screens
+    .on('postgres_changes',{
+      event:'UPDATE', schema:'public', table:'auctions',
+      filter:'id=eq.'+aucConfig.auctionId
+    }, async (payload)=>{
+      const updated = payload.new;
+      // Update pause button state if changed remotely
+      if(updated.status==='paused' && !aucPaused){
+        aucPaused=true;
+        const btn=document.getElementById('pause-btn');
+        if(btn) btn.textContent='▶ Resume';
+      } else if(updated.status==='live' && aucPaused){
+        aucPaused=false;
+        const btn=document.getElementById('pause-btn');
+        if(btn) btn.textContent='⏸ Pause';
+      }
     })
     .subscribe();
 }
@@ -1859,6 +1915,8 @@ function nextPlayer(){
       .eq('player_id',aucQueue[aucIdx].id)
       .then();
   }
+  // FIX 3: Persist full state so refresh restores correctly
+  saveAuctionState('live');
 }
 function finalizeSold(){
   const p=aucQueue[aucIdx];const m=aucMgrs.find(x=>x.id===aucTop);
@@ -1894,6 +1952,7 @@ function finalizeSold(){
   }
   showSoldOv('SOLD','₹'+aucBid+'cr → '+m.name,true);
   renderBiddersBar();renderQueueList();
+  saveAuctionState('live');
   setTimeout(()=>{hideSoldOv();nextPlayer();},2400);
 }
 function sellNow(){if(!aucTop){showToast('No bids yet','error');return;}if(aucInterval)clearInterval(aucInterval);finalizeSold();}
@@ -1951,7 +2010,14 @@ async function supabase_placeBidDB(auctionId,playerId,bidderId,amount){
     bidder_id:bidderId,amount:amount,is_winning:true
   });
 }
-function togglePause(){aucPaused=!aucPaused;const btn=document.getElementById('pause-btn');if(btn)btn.textContent=aucPaused?'▶ Resume':'⏸ Pause';addLog('sys',aucPaused?'PAUSED':'RESUMED');}
+function togglePause(){
+  aucPaused=!aucPaused;
+  const btn=document.getElementById('pause-btn');
+  if(btn)btn.textContent=aucPaused?'▶ Resume':'⏸ Pause';
+  addLog('sys',aucPaused?'PAUSED':'RESUMED');
+  // FIX 3+5: Save paused/live status so all screens see it
+  saveAuctionState(aucPaused?'paused':'live');
+}
 function addAucTime(s){aucTimer+=s;updateAucTimerUI();}
 function startAucTimer(s){
   aucTimer=s;if(aucInterval)clearInterval(aucInterval);
@@ -2011,11 +2077,15 @@ function renderAucBidDisplay(){
 }
 function renderBiddersBar(){
   const bar=document.getElementById('bidders-bar');if(!bar)return;
-  bar.innerHTML='<span style="font-size:10px;color:var(--muted);flex-shrink:0">Click to bid →</span>'+
-    aucMgrs.map(m=>`<div class="bpill ${aucTop===m.id?'winning':''}" onclick="placeBid('${m.id}')">
+  // FIX 4: Show manager budget status — no mock bid buttons.
+  // Managers bid from their own screen. Admin sees who is leading.
+  const leadingMgr = aucMgrs.find(m=>m.id===aucTop);
+  bar.innerHTML=
+    '<span style="font-size:10px;color:var(--muted);flex-shrink:0;padding-right:4px">Managers:</span>'+
+    aucMgrs.map(m=>`<div class="bpill ${aucTop===m.id?'winning':''}">
       <div class="b-av ${m.av}">${m.ini}</div>
       <span style="font-size:11px;font-weight:500">${m.name}</span>
-      <span style="font-size:9px;color:var(--muted)">₹${m.budget}cr · ${m.squad.length}/${aucConfig.squad}</span>
+      <span style="font-size:9px;color:var(--muted)">₹${m.budget}cr · ${m.squad.length}/${aucConfig.squad||16}</span>
       ${aucTop===m.id?'<span style="font-size:8px;color:var(--green);font-weight:700">LEADING</span>':''}
     </div>`).join('');
 }
@@ -2477,14 +2547,34 @@ async function initMgrAuctionTab(){
   // Get all managers in this league (for scoreboard)
   mgrAucState.allManagers = await sbGetLeagueMembers(lgId);
 
-  // Find the active auction for this league
+  // Find the active auction — check both live and paused
   const {data:auc} = await sb.from('auctions')
-    .select('id,status').eq('league_id',lgId)
-    .in('status',['live','pending']).maybeSingle();
+    .select('id,status,state_json').eq('league_id',lgId)
+    .in('status',['live','paused'])
+    .order('created_at',{ascending:false})
+    .limit(1)
+    .maybeSingle();
 
   if(!auc){
-    renderMgrWaiting('No active auction found. Ask admin to launch the auction.');
+    // FIX 2: Check if league still shows as 'auction' — admin may have launched
+    const {data:lgRow} = await sb.from('leagues').select('status').eq('id',lgId).single();
+    if(lgRow?.status!=='auction'){
+      renderMgrWaiting('No active auction. Wait for the admin to launch the auction.');
+    } else {
+      renderMgrWaiting('Auction starting soon — waiting for admin to begin bidding...');
+    }
     return;
+  }
+  // Restore shared log from state_json
+  const savedState = auc.state_json||{};
+  if(savedState.logs && savedState.logs.length){
+    const logEl=document.getElementById('mat-log');
+    if(logEl){
+      logEl.innerHTML=savedState.logs.slice(0,50).map(l=>`
+        <div class="mat-log-row ${l.type}">
+          ${l.text}<div style="font-size:9px;color:var(--muted)">${l.time}</div>
+        </div>`).join('');
+    }
   }
   mgrAucState.auctionId = auc.id;
   mgrAucState.status = auc.status;
@@ -2872,6 +2962,39 @@ function subscribeToMgrAuction(){
         // New player up — refresh current player
         await refreshMgrCurrentPlayer();
         await refreshMgrLog();
+      }
+    })
+    // FIX 5: Listen for auction state changes (paused, log updates, next player)
+    .on('postgres_changes',{
+      event:'UPDATE', schema:'public', table:'auctions',
+      filter:'id=eq.'+mgrAucState.auctionId
+    }, async (payload)=>{
+      const updated = payload.new;
+      const state   = updated.state_json||{};
+      // Sync pause status
+      const statusEl=document.getElementById('mgr-auc-status');
+      if(updated.status==='paused'){
+        if(statusEl) statusEl.textContent='⏸ Auction paused by admin';
+        mgrAddLog('sys','Auction paused');
+      } else if(updated.status==='live' && state.idx===mgrAucState._lastIdx){
+        if(statusEl&&mgrAucState.currentPlayer) statusEl.textContent='On auction: '+mgrAucState.currentPlayer.n;
+        mgrAddLog('sys','Auction resumed');
+      }
+      // Sync shared log — show any entries the manager missed
+      if(state.logs && state.logs.length){
+        const logEl=document.getElementById('mat-log');
+        if(logEl){
+          logEl.innerHTML=state.logs.slice(0,50).map(l=>`
+            <div class="mat-log-row ${l.type}">
+              ${l.text}<div style="font-size:9px;color:var(--muted)">${l.time}</div>
+            </div>`).join('');
+        }
+      }
+      // If auction completed, show a "Auction ended" message
+      if(updated.status==='completed'){
+        renderMgrWaiting('Auction has ended. Check your squad page.');
+        document.getElementById('mgr-bid-wrap').style.display='none';
+        mgrAddLog('sys','🏁 Auction ended');
       }
     })
     .subscribe();
