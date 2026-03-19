@@ -735,15 +735,18 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
       </div>
 
       <!-- Current player spotlight -->
-      <div class="card" id="mgr-spotlight" style="position:relative">
-        <!-- FIX 4: Sold/Unsold overlay — mirrors admin control room -->
-        <div class="sold-ov" id="mgr-sold-ov">
+      <div class="card" style="position:relative">
+        <!-- Sold/Unsold overlay — persists, never overwritten by content changes -->
+        <div class="sold-ov" id="mgr-sold-ov" style="border-radius:var(--radius-lg)">
           <div class="sold-stamp" id="mgr-sold-stamp">SOLD</div>
           <div class="sold-sub-txt" id="mgr-sold-sub"></div>
         </div>
-        <div style="padding:28px;text-align:center;color:var(--muted)">
-          <div style="font-size:32px;margin-bottom:8px">🏏</div>
-          <div style="font-size:13px">Waiting for admin to start the auction</div>
+        <!-- Content area — this is what gets updated -->
+        <div id="mgr-spotlight">
+          <div style="padding:28px;text-align:center;color:var(--muted)">
+            <div style="font-size:32px;margin-bottom:8px">🏏</div>
+            <div style="font-size:13px">Waiting for admin to start the auction</div>
+          </div>
         </div>
       </div>
 
@@ -2099,11 +2102,10 @@ function renderAucCenter(p){
           <button class="btn-sm red" onclick="markUnsold()">Mark Unsold</button>
           <button class="btn-sm green" id="sell-now-btn" onclick="sellNow()" disabled>Sell Now ✓</button>
           <button class="btn-sm" onclick="addAucTime(10)">+10s</button>
-          <button class="btn-sm gold" onclick="nextPlayer()">Next ▶</button>
         </div>
       </div>
     </div>
-    <div style="font-size:10px;color:var(--muted)">Click manager pills below to simulate bids</div>`;
+    `;
 }
 function renderAucBidDisplay(){
   const m=aucMgrs.find(x=>x.id===aucTop);
@@ -2204,85 +2206,6 @@ async function restartAuction(){
   showToast('Auction restarted — click Start to begin','success');
 }
 
-
-function confirmRestartAuction(){
-  showConfirm(
-    '↺ Restart Auction?',
-    'This will clear ALL bids, sold players and squad assignments for this league. All managers return to full budget. This cannot be undone.',
-    restartAuction
-  );
-}
-
-async function restartAuction(){
-  if(!aucConfig.auctionId||!aucConfig.leagueId){
-    showToast('No active auction to restart','error'); return;
-  }
-  if(aucInterval) clearInterval(aucInterval);
-
-  showToast('Restarting auction...','info');
-
-  const lgId  = aucConfig.leagueId;
-  const aucId = aucConfig.auctionId;
-
-  // 1. Mark old auction as reset
-  await sb.from('auctions').update({status:'reset',state_json:{}}).eq('id',aucId);
-
-  // 2. Delete all bids and queue entries for old auction
-  await sb.from('auction_bids').delete().eq('auction_id',aucId);
-  await sb.from('auction_queue').delete().eq('auction_id',aucId);
-
-  // 3. Delete all squad entries for this league
-  await sb.from('squads').delete().eq('league_id',lgId);
-
-  // 4. Reset all managers' budgets to original
-  const origBudget = aucConfig.budget||100;
-  for(const m of aucMgrs){
-    m.budget = origBudget;
-    m.squad  = [];
-    await sb.from('league_members')
-      .update({budget_remaining:origBudget})
-      .eq('league_id',lgId).eq('user_id',m.id);
-  }
-
-  // 5. Create a fresh auction row
-  const {data:newAuc, error:aucErr} = await sb.from('auctions')
-    .insert({league_id:lgId, status:'live', started_at:new Date().toISOString()})
-    .select().single();
-  if(aucErr){ showToast('Restart failed: '+aucErr.message,'error'); return; }
-
-  // 6. Re-insert full player queue (all pending)
-  if(!PLAYERS_DATA.length) PLAYERS_DATA = await sbGetPlayers();
-  aucQueue = PLAYERS_DATA.map(p=>({...p,soldTo:null,unsold:false,soldPrice:0}));
-  const queueRows = aucQueue.map((p,i)=>({
-    auction_id:newAuc.id, player_id:p.id, queue_order:i+1, status:'pending'
-  }));
-  await sb.from('auction_queue').insert(queueRows);
-
-  // 7. Reset all local state
-  aucConfig.auctionId = newAuc.id;
-  aucIdx=-1; aucBid=0; aucTop=null;
-  aucSold=0; aucUnsold=0; aucLogs=[];
-  aucPaused=false;
-
-  LEAGUE_AUCTIONS[lgId]={
-    inProgress:true,completed:false,
-    config:aucConfig, mgrs:aucMgrs, queue:aucQueue,
-    idx:-1,bid:0,top:null,sold:0,unsold:0,logs:[]
-  };
-
-  // 8. Save reset state_json → broadcast to all manager screens
-  await saveAuctionState('live');
-
-  // Re-subscribe admin with new auction ID
-  subscribeAdminToAuction();
-
-  // Update UI
-  document.getElementById('a-sold-badge').textContent  = '0 Sold';
-  document.getElementById('a-unsold-badge').textContent = '0 Unsold';
-  renderQueueList(); renderBiddersBar(); addLog('sys','🔄 Auction restarted from scratch');
-  showAucScreen('waiting');
-  showToast('Auction restarted — all data cleared','success');
-}
 
 function confirmEndAuction(){showConfirm('End Auction?','This will close the auction. Any current player with no bids is marked unsold.',endAuction);}
 function confirmGoHome(){showConfirm('Leave Auction?','The auction will be paused. You can return to it from Home.',()=>{if(aucInterval)clearInterval(aucInterval);goHome();});}
@@ -3078,19 +3001,19 @@ async function renderMgrScoreboard(){
     const ini=(m.profiles?.avatar_ini||name.substring(0,2)).toUpperCase();
     const av='av-'+(m.profiles?.avatar_idx||0);
     const bud=parseFloat(m.budget_remaining||0);
-    // Get won players from auction_bids
-    const {data:wonBids}=await sb.from('auction_bids')
-      .select('amount,player_id,players(name,role,ipl_team_code)')
-      .eq('auction_id',mgrAucState.auctionId)
-      .eq('bidder_id',m.user_id)
-      .eq('is_winning',true);
-    const players=wonBids||[];
-    const spent=players.reduce((s,b)=>s+parseFloat(b.amount),0);
+    // FIX 1: Use squads table — shows only confirmed won players, not all bids
+    const {data:squadRows}=await sb.from('squads')
+      .select('bought_price,player_id,players(name,role,ipl_team_code)')
+      .eq('league_id',mgrAucState.leagueId)
+      .eq('user_id',m.user_id);
+    const players=squadRows||[];
+    const spent=players.reduce((s,p)=>s+parseFloat(p.bought_price),0);
+    const roleBg2={BAT:'av-bat',BWL:'av-bwl',AR:'av-ar',WK:'av-wk'};
     return`<div class="sb-card" style="margin-bottom:10px">
       <div class="sb-card-hdr">
         <div class="sb-av ${av}">${ini}</div>
         <div>
-          <div style="font-size:13px;font-weight:600">${name}${isMe?' <span class=\"badge b-blue\" style=\"font-size:8px\">You</span>':''}</div>
+          <div style="font-size:13px;font-weight:600">${name}${isMe?' <span class="badge b-blue" style="font-size:8px">You</span>':''}</div>
           <div style="font-size:10px;color:var(--muted)">${players.length} players · ₹${bud}cr left</div>
         </div>
       </div>
@@ -3100,17 +3023,19 @@ async function renderMgrScoreboard(){
         <div class="sb-stat"><div class="sv" style="color:var(--gold)">${players.length}</div><div class="sl">Players</div></div>
       </div>
       <div style="padding:5px">
-        ${players.slice(0,5).map(b=>`<div class="sb-sq-row">
-          <div class="sb-sq-av ${RC[b.players.role]||'av-0'}">${b.players.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()}</div>
-          <span style="font-size:10px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${b.players.name}</span>
-          <span style="font-size:9px;color:var(--muted);padding:1px 4px;background:var(--s2);border-radius:3px">${b.players.role}</span>
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold)">₹${b.amount}</span>
-        </div>`).join('')}
+        ${players.slice(0,5).map(p=>{
+          const ini2=p.players.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase();
+          return '<div class="sb-sq-row">'
+            +'<div class="sb-sq-av '+(roleBg2[p.players.role]||'av-0')+'">'+ini2+'</div>'
+            +'<span style="font-size:10px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+p.players.name+'</span>'
+            +'<span style="font-size:9px;color:var(--muted);padding:1px 4px;background:var(--s2);border-radius:3px">'+p.players.role+'</span>'
+            +'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:11px;color:var(--gold)">₹'+p.bought_price+'cr</span>'
+            +'</div>';
+        }).join('')}
         ${players.length>5?`<div style="font-size:9px;color:var(--muted);padding:3px 5px">+${players.length-5} more</div>`:''}
         ${!players.length?'<div style="font-size:10px;color:var(--muted);padding:6px">No players won yet</div>':''}
       </div>
-    </div>`;
-  }));
+    </div>`;  }));
 
   sbEl.innerHTML=cards.join('');
 }
