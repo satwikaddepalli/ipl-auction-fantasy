@@ -1757,6 +1757,43 @@ async function launchAuction(){
   addLog('sys','League "'+aucConfig.leagueName+'" — '+aucMgrs.length+' managers · '+aucQueue.length+' players');
   showAucScreen('waiting');
   showS('s-auction');
+  // Subscribe to manager bids in realtime so admin sees them instantly
+  subscribeAdminToAuction();
+}
+
+
+function subscribeAdminToAuction(){
+  // Unsubscribe any existing admin channel
+  if(window._adminAucChannel){
+    sb.removeChannel(window._adminAucChannel);
+    window._adminAucChannel=null;
+  }
+  if(!aucConfig.auctionId) return;
+
+  window._adminAucChannel = sb.channel('admin-auction-'+aucConfig.auctionId)
+    // FIX 1: Manager bids → update admin bid display + bidder pills
+    .on('postgres_changes',{
+      event:'INSERT', schema:'public', table:'auction_bids',
+      filter:'auction_id=eq.'+aucConfig.auctionId
+    }, async (payload)=>{
+      const bid = payload.new;
+      if(!bid.is_winning) return;
+      // Find which manager placed this bid
+      const m = aucMgrs.find(x=>x.id===bid.bidder_id);
+      if(!m) return;
+      // Update admin-side state
+      aucBid = parseFloat(bid.amount);
+      aucTop = bid.bidder_id;
+      // Reset timer to 20s on new bid (same as local placeBid)
+      startAucTimer(Math.min(20,aucConfig.timer));
+      // FIX 2: Add to admin auction log
+      addLog('bid', m.name+' bid ₹'+bid.amount+'cr');
+      // Update admin UI
+      renderAucBidDisplay();
+      renderBiddersBar();
+      const sb2=document.getElementById('sell-now-btn');if(sb2)sb2.disabled=false;
+    })
+    .subscribe();
 }
 
 /* ══════════════════════════════════════════
@@ -1922,9 +1959,17 @@ function startAucTimer(s){
   aucInterval=setInterval(()=>{if(aucPaused)return;aucTimer--;updateAucTimerUI();if(aucTimer<=0){clearInterval(aucInterval);markUnsold();}},1000);
 }
 function updateAucTimerUI(){
-  ['auc-timer-num'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=aucTimer;});
-  const fg=document.getElementById('auc-timer-fg');
-  if(fg){fg.style.strokeDashoffset=176*(1-aucTimer/aucConfig.timer);fg.style.stroke=aucTimer>10?'var(--green)':aucTimer>5?'var(--gold)':'var(--red)';}
+  const timerMax=aucConfig.timer||30;
+  const offset=176*(1-aucTimer/timerMax);
+  const stroke=aucTimer>10?'var(--green)':aucTimer>5?'var(--gold)':'var(--red)';
+  // Update admin timer
+  const an=document.getElementById('auc-timer-num');if(an)an.textContent=aucTimer;
+  const af=document.getElementById('auc-timer-fg');
+  if(af){af.style.strokeDashoffset=offset;af.style.stroke=stroke;}
+  // FIX 4: Update manager timer (shown in their spotlight)
+  const mn=document.getElementById('mgr-timer-num');if(mn)mn.textContent=aucTimer;
+  const mf=document.getElementById('mgr-timer-fg');
+  if(mf){mf.style.strokeDashoffset=offset;mf.style.stroke=stroke;}
 }
 function buildStats(p){
   if(p.r==='BAT'||p.r==='WK')return`<div class="sp-stat"><div class="sp-sv" style="color:var(--accent)">${p.stats.avg||'-'}</div><div class="sp-sl">Avg</div></div><div class="sp-stat"><div class="sp-sv" style="color:var(--gold)">${p.stats.sr||'-'}</div><div class="sp-sl">SR</div></div>`;
@@ -2413,7 +2458,7 @@ function mgrAucTab(tab){
     if(sbEl)sbEl.style.display='block';
     if(logTab){logTab.style.borderBottomColor='transparent';logTab.style.color='var(--muted)';}
     if(sbTab){sbTab.style.borderBottomColor='var(--gold)';sbTab.style.color='var(--gold)';}
-    renderMgrScoreboard();
+    renderMgrScoreboard(); // async — fetches fresh data each time tab is opened
   }
 }
 
@@ -2597,12 +2642,20 @@ function renderMgrSpotlight(){
   const el=document.getElementById('mgr-spotlight');
   if(!el) return;
   el.innerHTML=`
-    <div style="padding:16px;display:flex;gap:14px;align-items:flex-start">
-      <div class="big-av ${rcClass}" style="width:56px;height:56px;font-size:18px;flex-shrink:0">${p.ini}</div>
+    <div style="padding:14px 16px;display:flex;gap:12px;align-items:center">
+      <div class="big-av ${rcClass}" style="width:52px;height:52px;font-size:17px;flex-shrink:0">${p.ini}</div>
       <div style="flex:1;min-width:0">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">${p.t} · ${RN[p.r]||p.r}</div>
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:1px;line-height:1">${p.n}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:3px">Base price ₹${p.base}cr</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:1px;line-height:1">${p.n}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">Base ₹${p.base}cr</div>
+      </div>
+      <div class="timer-ring" style="flex-shrink:0">
+        <svg width="56" height="56" viewBox="0 0 64 64">
+          <circle class="bg-ring" cx="32" cy="32" r="28"/>
+          <circle class="fg-ring" id="mgr-timer-fg" cx="32" cy="32" r="28"
+            style="stroke-dashoffset:${176*(1-aucTimer/(aucConfig.timer||30))};stroke:${aucTimer>10?'var(--green)':aucTimer>5?'var(--gold)':'var(--red)'}"/>
+        </svg>
+        <div class="timer-num" id="mgr-timer-num" style="font-size:17px">${aucTimer}</div>
       </div>
     </div>
     <div style="padding:0 16px 16px">
@@ -2646,11 +2699,18 @@ async function managerPlaceBid(){
   const nextBid = parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
   if(nextBid > mgrAucState.myBudget){ showToast('Not enough budget','error'); return; }
 
-  // Disable button to prevent double-tap
+  // Disable button immediately to prevent double-tap
   const bb=document.getElementById('mgr-bid-btn');
-  if(bb){ bb.disabled=true; bb.textContent='PLACING BID...'; }
+  if(bb){ bb.disabled=true; bb.innerHTML='PLACING BID...'; }
 
-  // Write bid to Supabase — Realtime will broadcast to admin + all managers
+  // Clear any previous winning bid for this player first
+  await sb.from('auction_bids')
+    .update({is_winning:false})
+    .eq('auction_id',mgrAucState.auctionId)
+    .eq('player_id',mgrAucState.currentPlayer.id)
+    .eq('is_winning',true);
+
+  // Write new winning bid to Supabase — Realtime broadcasts to admin + all managers
   const {error} = await sb.from('auction_bids').insert({
     auction_id:  mgrAucState.auctionId,
     player_id:   mgrAucState.currentPlayer.id,
@@ -2661,7 +2721,8 @@ async function managerPlaceBid(){
 
   if(error){
     showToast('Bid failed: '+error.message,'error');
-    if(bb){ bb.disabled=false; bb.innerHTML='BID ₹<span id="mgr-next-bid">'+nextBid+'</span>cr'; }
+    // FIX 3: Restore button with correct innerHTML (not textContent)
+    if(bb){ bb.disabled=false; bb.innerHTML='BID &#x20b9;<span id="mgr-next-bid">'+nextBid+'</span>cr'; }
     return;
   }
 
@@ -2669,11 +2730,13 @@ async function managerPlaceBid(){
   mgrAucState.currentBid = nextBid;
   mgrAucState.currentBidder = user.id;
   mgrAucState.currentBidderName = CU.name;
-  mgrAucState.myBudget = parseFloat((mgrAucState.myBudget - 0).toFixed(2)); // budget updates on sold
+  // Note: myBudget deducted on SOLD event, not on bid
   document.getElementById('mgr-budget-disp').textContent=mgrAucState.myBudget;
 
   // Add to local log
   mgrAddLog('mine','You bid ₹'+nextBid+'cr for '+mgrAucState.currentPlayer.n);
+
+  // FIX 3: Re-render spotlight which correctly restores the bid button state
   renderMgrSpotlight();
   showToast('Bid placed: ₹'+nextBid+'cr','success');
 }
@@ -2688,35 +2751,64 @@ function mgrAddLog(type, text){
   logEl.insertBefore(row,logEl.firstChild);
 }
 
-function renderMgrScoreboard(){
+async function renderMgrScoreboard(){
   const sbEl=document.getElementById('mat-sb');
   if(!sbEl) return;
+  sbEl.innerHTML='<div style="padding:12px;color:var(--muted);font-size:11px;text-align:center">Loading scoreboard...</div>';
+
+  // Refresh members list to get latest budgets
+  try{ mgrAucState.allManagers=await sbGetLeagueMembers(mgrAucState.leagueId); }
+  catch(e){ console.error('sb refresh',e); }
+
+  const {data:{user}} = await sb.auth.getUser();
+
   if(!mgrAucState.allManagers.length){
-    sbEl.innerHTML='<div style="padding:12px;color:var(--muted);font-size:11px;text-align:center">Loading...</div>';
-    sb.auth.getUser().then(({data:{user}})=>{
-      sbGetLeagueMembers(mgrAucState.leagueId).then(members=>{
-        mgrAucState.allManagers=members;
-        renderMgrScoreboard();
-      });
-    });
+    sbEl.innerHTML='<div style="padding:12px;color:var(--muted);font-size:11px;text-align:center">No managers found</div>';
     return;
   }
-  sb.auth.getUser().then(({data:{user}})=>{
-    sbEl.innerHTML=mgrAucState.allManagers.map(m=>{
-      const isMe=m.user_id===user.id;
-      const name=m.profiles?.name||'Manager';
-      const ini=(m.profiles?.avatar_ini||name.substring(0,2)).toUpperCase();
-      const av='av-'+(m.profiles?.avatar_idx||0);
-      const bud=parseFloat(m.budget_remaining||0);
-      return`<div class="mat-sb-row ${isMe?'me':''}">
-        <div class="uc-av ${av}" style="width:26px;height:26px;font-size:9px;flex-shrink:0">${ini}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:11px;font-weight:500">${name}${isMe?' (You)':''}</div>
-          <div style="font-size:9px;color:var(--muted)">₹${bud}cr left</div>
+
+  // Build scorecard: for each manager fetch their winning bids
+  const cards = await Promise.all(mgrAucState.allManagers.map(async m=>{
+    const isMe=m.user_id===user.id;
+    const name=m.profiles?.name||'Manager';
+    const ini=(m.profiles?.avatar_ini||name.substring(0,2)).toUpperCase();
+    const av='av-'+(m.profiles?.avatar_idx||0);
+    const bud=parseFloat(m.budget_remaining||0);
+    // Get won players from auction_bids
+    const {data:wonBids}=await sb.from('auction_bids')
+      .select('amount,player_id,players(name,role,ipl_team_code)')
+      .eq('auction_id',mgrAucState.auctionId)
+      .eq('bidder_id',m.user_id)
+      .eq('is_winning',true);
+    const players=wonBids||[];
+    const spent=players.reduce((s,b)=>s+parseFloat(b.amount),0);
+    return`<div class="sb-card" style="margin-bottom:10px">
+      <div class="sb-card-hdr">
+        <div class="sb-av ${av}">${ini}</div>
+        <div>
+          <div style="font-size:13px;font-weight:600">${name}${isMe?' <span class=\"badge b-blue\" style=\"font-size:8px\">You</span>':''}</div>
+          <div style="font-size:10px;color:var(--muted)">${players.length} players · ₹${bud}cr left</div>
         </div>
-      </div>`;
-    }).join('');
-  });
+      </div>
+      <div class="sb-stats">
+        <div class="sb-stat"><div class="sv" style="color:var(--red)">₹${parseFloat(spent.toFixed(1))}</div><div class="sl">Spent</div></div>
+        <div class="sb-stat"><div class="sv" style="color:var(--green)">₹${bud}</div><div class="sl">Left</div></div>
+        <div class="sb-stat"><div class="sv" style="color:var(--gold)">${players.length}</div><div class="sl">Players</div></div>
+      </div>
+      <div style="padding:5px">
+        ${players.slice(0,5).map(b=>`<div class="sb-sq-row">
+          <div class="sb-sq-av ${RC[b.players.role]||'av-0'}">${b.players.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()}</div>
+          <span style="font-size:10px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${b.players.name}</span>
+          <span style="font-size:9px;color:var(--muted);padding:1px 4px;background:var(--s2);border-radius:3px">${b.players.role}</span>
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold)">₹${b.amount}</span>
+        </div>`).join('')}
+        ${players.length>5?`<div style="font-size:9px;color:var(--muted);padding:3px 5px">+${players.length-5} more</div>`:''}
+        ${!players.length?'<div style="font-size:10px;color:var(--muted);padding:6px">No players won yet</div>':''}
+      </div>
+    </div>`;
+  }));
+
+  sbEl.innerHTML=cards.join('');
 }
 
 function subscribeToMgrAuction(){
