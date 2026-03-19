@@ -350,6 +350,19 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
 
 /* container */
 .pg-wrap{padding:14px;max-width:1060px;margin:0 auto}
+/* manager auction tab */
+.mat-player-card{background:var(--s1);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden}
+.mat-bid-display{font-family:'Bebas Neue',sans-serif;font-size:52px;color:var(--gold);line-height:1;letter-spacing:1px}
+.mat-log-row{padding:6px 9px;border-radius:5px;margin-bottom:3px;font-size:11px;line-height:1.4;border-left:3px solid transparent}
+.mat-log-row.bid{border-left-color:var(--gold);background:rgba(245,166,35,.06)}
+.mat-log-row.sold{border-left-color:var(--green);background:rgba(0,212,170,.06)}
+.mat-log-row.unsold{border-left-color:var(--red);background:rgba(255,77,109,.06)}
+.mat-log-row.sys{border-left-color:var(--muted);background:rgba(90,110,138,.04)}
+.mat-log-row.mine{border-left-color:var(--accent);background:rgba(96,165,250,.08)}
+.mat-sb-row{display:flex;align-items:center;gap:8px;padding:7px 9px;border-bottom:1px solid var(--border);font-size:11px}
+.mat-sb-row.me{background:rgba(245,166,35,.05);border-left:2px solid var(--gold)}
+.sold-flash{animation:soldFlash .6s ease-out}
+@keyframes soldFlash{0%{background:rgba(0,212,170,.3)}100%{background:transparent}}
 </style>
 </head>
 <body>
@@ -621,6 +634,10 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
     <div class="nav-tab" onclick="switchTab('transfers',this)" id="dt-transfers">Transfers</div>
     <div class="nav-tab" onclick="switchTab('fixtures',this)" id="dt-fixtures">Fixtures</div>
     <div class="nav-tab" onclick="switchTab('league',this)" id="dt-league">League</div>
+    <div class="nav-tab off" onclick="switchTab('auction',this)" id="dt-auction">
+      <span class="pulse" style="width:7px;height:7px;margin-right:5px;display:none" id="dt-auction-pulse"></span>
+      Auction
+    </div>
     <div class="nav-right">
       <div class="nfb"><span class="tm" id="d-match">MI vs RCB</span><span class="ct ok" id="d-timer">2h 14m</span></div>
       <span class="badge b-gold">₹<span id="d-budget">31.5</span>cr</span>
@@ -698,6 +715,70 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
     <div class="card"><div class="card-hdr"><span class="card-title">This Gameweek</span><span style="font-size:10px;color:var(--muted)">GW3</span></div><div id="lb-gw"></div></div>
   </div></div>
   </div>
+
+  <!-- ════ AUCTION TAB (manager bidding view) ════ -->
+  <div id="tab-auction" class="page">
+  <div style="display:flex;height:100%;overflow:hidden">
+
+    <!-- Left: Player spotlight + bid controls -->
+    <div style="flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px">
+
+      <!-- Status bar -->
+      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+        <div class="pulse" id="mgr-auc-pulse" style="display:none"></div>
+        <span style="font-size:13px;font-weight:600" id="mgr-auc-status">Waiting for auction to start...</span>
+        <span class="badge b-green" id="mgr-sold-badge" style="display:none">0 Sold</span>
+        <span class="badge b-red" id="mgr-unsold-badge" style="display:none">0 Unsold</span>
+        <span class="badge b-gold" style="margin-left:auto">₹<span id="mgr-budget-disp">—</span>cr left</span>
+      </div>
+
+      <!-- Current player spotlight -->
+      <div class="card" id="mgr-spotlight">
+        <div style="padding:28px;text-align:center;color:var(--muted)">
+          <div style="font-size:32px;margin-bottom:8px">🏏</div>
+          <div style="font-size:13px">Waiting for admin to start the auction</div>
+        </div>
+      </div>
+
+      <!-- BID button -->
+      <div id="mgr-bid-wrap" style="display:none">
+        <button id="mgr-bid-btn"
+          onclick="managerPlaceBid()"
+          style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold2));color:#000;border:none;border-radius:var(--radius);padding:16px;font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:3px;cursor:pointer;transition:.2s">
+          BID ₹<span id="mgr-next-bid">—</span>cr
+        </button>
+        <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:6px" id="mgr-bid-hint">
+          Tap to place bid
+        </div>
+      </div>
+
+      <!-- Squad progress -->
+      <div class="card">
+        <div class="card-hdr"><span class="card-title">My Squad</span><span class="badge b-blue" id="mgr-squad-count">0 players</span></div>
+        <div style="padding:8px" id="mgr-my-squad">
+          <div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: scoreboard + log -->
+    <div style="width:280px;flex-shrink:0;border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden">
+      <!-- Tabs -->
+      <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0">
+        <div id="mat-log-tab" onclick="mgrAucTab('log')"
+          style="flex:1;padding:9px;text-align:center;font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid var(--gold);color:var(--gold)">Log</div>
+        <div id="mat-sb-tab" onclick="mgrAucTab('sb')"
+          style="flex:1;padding:9px;text-align:center;font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)">Scores</div>
+      </div>
+      <!-- Log panel -->
+      <div id="mat-log" style="flex:1;overflow-y:auto;padding:5px"></div>
+      <!-- Scoreboard panel -->
+      <div id="mat-sb" style="flex:1;overflow-y:auto;padding:8px;display:none"></div>
+    </div>
+
+  </div>
+  </div>
+
 </div>
 
 <!-- MODALS -->
@@ -1349,8 +1430,21 @@ async function openLeague(lgId){
   document.getElementById('d-budget').textContent=dbBudget;
   // Transfers tab
   const xt=document.getElementById('dt-transfers');
-  xt.className='nav-tab'+(lg.transferGWs.includes(lg.gw)?'':' off');
-  switchTab('squad',document.getElementById('dt-squad'));
+  xt.className='nav-tab'+(lg.transferGWs&&lg.transferGWs.includes(lg.gw)?'':' off');
+  // Auction tab — show and pulse if league auction is live
+  const aucTabEl=document.getElementById('dt-auction');
+  const aucPulseEl=document.getElementById('dt-auction-pulse');
+  const isAucLive = lg.status==='auction';
+  if(aucTabEl){
+    aucTabEl.className='nav-tab'+(isAucLive?'':' off');
+    if(aucPulseEl) aucPulseEl.style.display=isAucLive?'block':'none';
+  }
+  // If auction is live go straight to auction tab, else squad
+  if(isAucLive){
+    switchTab('auction',aucTabEl);
+  } else {
+    switchTab('squad',document.getElementById('dt-squad'));
+  }
   showS('s-dashboard');
 }
 
@@ -1637,6 +1731,25 @@ async function launchAuction(){
   // Save inProgress state against this league
   const curAdminLg=LEAGUES_DB.filter(lg=>lg.adminId===CU.id).slice(-1)[0];
   if(curAdminLg){LEAGUE_AUCTIONS[curAdminLg.id]={inProgress:true,completed:false,config:aucConfig,mgrs:aucMgrs,queue:aucQueue,idx:aucIdx,bid:aucBid,top:aucTop,sold:0,unsold:0,logs:[]};}
+  // Create auction record in Supabase and set league status to 'auction'
+  if(aucConfig.leagueId){
+    const {data:aucRow,error:aucErr} = await sb.from('auctions')
+      .insert({league_id:aucConfig.leagueId,status:'live',started_at:new Date().toISOString()})
+      .select().single();
+    if(!aucErr && aucRow){
+      aucConfig.auctionId = aucRow.id;
+      // Insert all players into auction_queue
+      const queueRows = aucQueue.map((p,i)=>({
+        auction_id:aucRow.id, player_id:p.id, queue_order:i+1, status:'pending'
+      }));
+      await sb.from('auction_queue').insert(queueRows);
+    }
+    // Update league status so managers see the auction tab
+    await sb.from('leagues').update({status:'auction'}).eq('id',aucConfig.leagueId);
+    // Refresh local league cache
+    const lgIdx=LEAGUES_DB.findIndex(x=>x.id===aucConfig.leagueId);
+    if(lgIdx>=0) LEAGUES_DB[lgIdx].status='auction';
+  }
   document.getElementById('auc-league-name').textContent=aucConfig.leagueName;
   document.getElementById('a-sold-badge').textContent='0 Sold';
   document.getElementById('a-unsold-badge').textContent='0 Unsold';
@@ -1701,6 +1814,14 @@ function nextPlayer(){
   addLog('sys','— On auction: '+aucQueue[aucIdx].n+' (Base ₹'+aucBid+'cr) —');
   startAucTimer(aucConfig.timer);
   showAucScreen('live');
+  // Update auction_queue in Supabase → triggers Realtime for managers
+  if(aucConfig.auctionId && aucQueue[aucIdx]?.id){
+    sb.from('auction_queue')
+      .update({status:'live'})
+      .eq('auction_id',aucConfig.auctionId)
+      .eq('player_id',aucQueue[aucIdx].id)
+      .then();
+  }
 }
 function finalizeSold(){
   const p=aucQueue[aucIdx];const m=aucMgrs.find(x=>x.id===aucTop);
@@ -1711,6 +1832,29 @@ function finalizeSold(){
   // Keep in-progress snapshot fresh
   const curAdminLg=LEAGUES_DB.filter(lg=>lg.adminId===CU.id).slice(-1)[0];
   if(curAdminLg&&LEAGUE_AUCTIONS[curAdminLg.id]){Object.assign(LEAGUE_AUCTIONS[curAdminLg.id],{mgrs:aucMgrs,queue:aucQueue,idx:aucIdx,bid:aucBid,top:aucTop,sold:aucSold,unsold:aucUnsold,logs:aucLogs});}
+  // Sync to Supabase — update queue status + winning bid + budget
+  if(aucConfig.auctionId){
+    // Mark queue row as sold → fires Realtime UPDATE to managers
+    sb.from('auction_queue')
+      .update({status:'sold'})
+      .eq('auction_id',aucConfig.auctionId).eq('player_id',p.id).then();
+    // Clear any previous winning bids for this player, set this one
+    sb.from('auction_bids')
+      .update({is_winning:false})
+      .eq('auction_id',aucConfig.auctionId).eq('player_id',p.id).then(()=>{
+        sb.from('auction_bids').upsert({
+          auction_id:aucConfig.auctionId,player_id:p.id,
+          bidder_id:aucTop,amount:aucBid,is_winning:true,
+          placed_at:new Date().toISOString()
+        },{onConflict:'auction_id,player_id,bidder_id'}).then();
+      });
+    // Update winner's budget_remaining
+    if(aucConfig.leagueId){
+      sb.from('league_members')
+        .update({budget_remaining:m.budget})
+        .eq('league_id',aucConfig.leagueId).eq('user_id',aucTop).then();
+    }
+  }
   showSoldOv('SOLD','₹'+aucBid+'cr → '+m.name,true);
   renderBiddersBar();renderQueueList();
   setTimeout(()=>{hideSoldOv();nextPlayer();},2400);
@@ -1720,7 +1864,19 @@ function markUnsold(){
   if(aucInterval)clearInterval(aucInterval);
   const p=aucQueue[aucIdx];
   if(aucTop)finalizeSold();
-  else{p.unsold=true;aucUnsold++;document.getElementById('a-unsold-badge').textContent=aucUnsold+' Unsold';addLog('unsold',p.n+' UNSOLD — no bids');showSoldOv('UNSOLD','No bids received',false);renderQueueList();setTimeout(()=>{hideSoldOv();nextPlayer();},2400);}
+  else{
+    p.unsold=true;aucUnsold++;
+    document.getElementById('a-unsold-badge').textContent=aucUnsold+' Unsold';
+    addLog('unsold',p.n+' UNSOLD — no bids');
+    // Update queue in Supabase → fires Realtime to managers
+    if(aucConfig.auctionId){
+      sb.from('auction_queue').update({status:'unsold'})
+        .eq('auction_id',aucConfig.auctionId).eq('player_id',p.id).then();
+    }
+    showSoldOv('UNSOLD','No bids received',false);
+    renderQueueList();
+    setTimeout(()=>{hideSoldOv();nextPlayer();},2400);
+  }
 }
 function reAuction(pid){
   const p=aucQueue.find(x=>x.id===pid);if(!p||p.soldTo)return;
@@ -1740,8 +1896,23 @@ function placeBid(mid){
   addLog('bid',m.name+' bid ₹'+nb+'cr (+'+fmtInc(inc)+')');
   startAucTimer(Math.min(20,aucConfig.timer));
   renderAucBidDisplay();renderBiddersBar();
-  const sb=document.getElementById('sell-now-btn');if(sb)sb.disabled=false;
+  // Write bid to Supabase so managers see it in realtime
+  if(aucConfig.auctionId && aucQueue[aucIdx]?.id){
+    const pid=aucQueue[aucIdx].id;
+    supabase_placeBidDB(aucConfig.auctionId,pid,mid,nb);
+  }
+  const sellBtn=document.getElementById('sell-now-btn');if(sellBtn)sellBtn.disabled=false;
   showToast(m.name+' → ₹'+nb+'cr','info');
+}
+async function supabase_placeBidDB(auctionId,playerId,bidderId,amount){
+  // Clear old winning bid for this player
+  await sb.from('auction_bids').update({is_winning:false})
+    .eq('auction_id',auctionId).eq('player_id',playerId).eq('is_winning',true);
+  // Insert new winning bid
+  await sb.from('auction_bids').insert({
+    auction_id:auctionId,player_id:playerId,
+    bidder_id:bidderId,amount:amount,is_winning:true
+  });
 }
 function togglePause(){aucPaused=!aucPaused;const btn=document.getElementById('pause-btn');if(btn)btn.textContent=aucPaused?'▶ Resume':'⏸ Pause';addLog('sys',aucPaused?'PAUSED':'RESUMED');}
 function addAucTime(s){aucTimer+=s;updateAucTimerUI();}
@@ -1947,6 +2118,7 @@ function switchTab(id,el){
   if(id==='transfers')renderTransfers();
   if(id==='fixtures')renderFixtures();
   if(id==='league')renderLeague();
+  if(id==='auction')initMgrAuctionTab();
 }
 function setMode(m){
   autoMode=m==='auto';
@@ -2205,6 +2377,413 @@ async function renderLeague(){
     </div>`).join('');
 }
 
+
+/* ══════════════════════════════════════════
+   MANAGER AUCTION TAB
+══════════════════════════════════════════ */
+let mgrAucState = {
+  leagueId: null,
+  auctionId: null,
+  currentPlayer: null,
+  currentBid: 0,
+  currentBidder: null,
+  currentBidderName: null,
+  myBudget: 0,
+  mySquad: [],
+  allManagers: [],
+  logs: [],
+  channel: null,
+  soldCount: 0,
+  unsoldCount: 0,
+  status: 'waiting'
+};
+
+function mgrAucTab(tab){
+  const logEl=document.getElementById('mat-log');
+  const sbEl=document.getElementById('mat-sb');
+  const logTab=document.getElementById('mat-log-tab');
+  const sbTab=document.getElementById('mat-sb-tab');
+  if(tab==='log'){
+    if(logEl)logEl.style.display='block';
+    if(sbEl)sbEl.style.display='none';
+    if(logTab){logTab.style.borderBottomColor='var(--gold)';logTab.style.color='var(--gold)';}
+    if(sbTab){sbTab.style.borderBottomColor='transparent';sbTab.style.color='var(--muted)';}
+  } else {
+    if(logEl)logEl.style.display='none';
+    if(sbEl)sbEl.style.display='block';
+    if(logTab){logTab.style.borderBottomColor='transparent';logTab.style.color='var(--muted)';}
+    if(sbTab){sbTab.style.borderBottomColor='var(--gold)';sbTab.style.color='var(--gold)';}
+    renderMgrScoreboard();
+  }
+}
+
+async function initMgrAuctionTab(){
+  const lgId = CL_ID;
+  if(!lgId) return;
+  mgrAucState.leagueId = lgId;
+
+  // Get my budget from league_members
+  const {data:{user}} = await sb.auth.getUser();
+  const {data:memRow} = await sb.from('league_members')
+    .select('budget_remaining').eq('league_id',lgId).eq('user_id',user.id).single();
+  mgrAucState.myBudget = parseFloat(memRow?.budget_remaining||0);
+  document.getElementById('mgr-budget-disp').textContent = mgrAucState.myBudget;
+
+  // Get all managers in this league (for scoreboard)
+  mgrAucState.allManagers = await sbGetLeagueMembers(lgId);
+
+  // Find the active auction for this league
+  const {data:auc} = await sb.from('auctions')
+    .select('id,status').eq('league_id',lgId)
+    .in('status',['live','pending']).maybeSingle();
+
+  if(!auc){
+    renderMgrWaiting('No active auction found. Ask admin to launch the auction.');
+    return;
+  }
+  mgrAucState.auctionId = auc.id;
+  mgrAucState.status = auc.status;
+
+  // Load my current squad from auction bids (what I've won so far)
+  await refreshMgrSquad();
+
+  // Load auction queue to find current player
+  await refreshMgrCurrentPlayer();
+
+  // Load recent bids as log
+  await refreshMgrLog();
+
+  // Subscribe to realtime updates
+  subscribeToMgrAuction();
+
+  document.getElementById('mgr-auc-pulse').style.display='block';
+  document.getElementById('mgr-sold-badge').style.display='inline-block';
+  document.getElementById('mgr-unsold-badge').style.display='inline-block';
+}
+
+async function refreshMgrCurrentPlayer(){
+  if(!mgrAucState.auctionId) return;
+  // Get the current live player from auction_queue
+  const {data:qRow} = await sb.from('auction_queue')
+    .select('player_id,status,players(id,name,ipl_team_code,role,base_price)')
+    .eq('auction_id',mgrAucState.auctionId)
+    .eq('status','live')
+    .maybeSingle();
+
+  if(!qRow){
+    // No live player — check if auction is still open
+    renderMgrWaiting('Waiting for next player...');
+    return;
+  }
+
+  mgrAucState.currentPlayer = {
+    id:qRow.player_id,
+    n:qRow.players.name,
+    t:qRow.players.ipl_team_code,
+    r:qRow.players.role,
+    base:parseFloat(qRow.players.base_price),
+    ini:qRow.players.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()
+  };
+
+  // Get current winning bid
+  const {data:winBid} = await sb.from('auction_bids')
+    .select('amount,bidder_id,profiles(name)')
+    .eq('auction_id',mgrAucState.auctionId)
+    .eq('player_id',qRow.player_id)
+    .eq('is_winning',true)
+    .maybeSingle();
+
+  mgrAucState.currentBid   = parseFloat(winBid?.amount || mgrAucState.currentPlayer.base);
+  mgrAucState.currentBidder = winBid?.bidder_id || null;
+  mgrAucState.currentBidderName = winBid?.profiles?.name || null;
+
+  renderMgrSpotlight();
+}
+
+async function refreshMgrLog(){
+  if(!mgrAucState.auctionId) return;
+  const {data:bids} = await sb.from('auction_bids')
+    .select('amount,bidder_id,is_winning,placed_at,players(name),profiles(name)')
+    .eq('auction_id',mgrAucState.auctionId)
+    .order('placed_at',{ascending:false})
+    .limit(50);
+
+  const {data:{user}} = await sb.auth.getUser();
+  const logEl = document.getElementById('mat-log');
+  if(!logEl||!bids) return;
+
+  logEl.innerHTML = bids.map(b=>{
+    const isMe = b.bidder_id===user.id;
+    const t = new Date(b.placed_at).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    return`<div class="mat-log-row ${isMe?'mine':'bid'}">
+      <strong>${b.profiles?.name||'?'}</strong> bid ₹${b.amount}cr for ${b.players?.name||'?'}
+      ${isMe?'<span style="font-size:9px;color:var(--accent)"> (You)</span>':''}
+      <div style="font-size:9px;color:var(--muted)">${t}</div>
+    </div>`;
+  }).join('') || '<div style="padding:12px;color:var(--muted);font-size:11px;text-align:center">No bids yet</div>';
+}
+
+async function refreshMgrSquad(){
+  if(!mgrAucState.auctionId||!mgrAucState.leagueId) return;
+  const {data:{user}} = await sb.auth.getUser();
+  // Get players won by me in this auction (winning bids)
+  const {data:wonBids} = await sb.from('auction_bids')
+    .select('amount,player_id,players(name,role,ipl_team_code)')
+    .eq('auction_id',mgrAucState.auctionId)
+    .eq('bidder_id',user.id)
+    .eq('is_winning',true);
+
+  // Also check squads table for already-saved players
+  const {data:squadRows} = await sb.from('squads')
+    .select('bought_price,player_id,players(name,role,ipl_team_code)')
+    .eq('league_id',mgrAucState.leagueId)
+    .eq('user_id',user.id);
+
+  // Merge — prefer squads table, fall back to winning bids
+  const seen = new Set();
+  const merged = [];
+  (squadRows||[]).forEach(s=>{
+    seen.add(s.player_id);
+    merged.push({name:s.players.name,role:s.players.role,team:s.players.ipl_team_code,price:parseFloat(s.bought_price)});
+  });
+  (wonBids||[]).forEach(b=>{
+    if(!seen.has(b.player_id)){
+      merged.push({name:b.players.name,role:b.players.role,team:b.players.ipl_team_code,price:parseFloat(b.amount)});
+    }
+  });
+  mgrAucState.mySquad = merged;
+
+  const squadEl=document.getElementById('mgr-my-squad');
+  const countEl=document.getElementById('mgr-squad-count');
+  if(countEl) countEl.textContent=merged.length+' players';
+  if(!squadEl) return;
+  if(!merged.length){
+    squadEl.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>';
+    return;
+  }
+  squadEl.innerHTML=merged.map(p=>`
+    <div style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-bottom:1px solid rgba(31,46,72,.3)">
+      <div class="st-av ${RC[p.role]||'av-0'}">${p.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
+        <div style="font-size:9px;color:var(--muted)">${p.team} · ${p.role}</div>
+      </div>
+      <span style="font-family:'Bebas Neue',sans-serif;font-size:12px;color:var(--gold);flex-shrink:0">₹${p.price}cr</span>
+    </div>`).join('');
+}
+
+function renderMgrWaiting(msg){
+  const el=document.getElementById('mgr-spotlight');
+  if(el) el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--muted)">
+    <div style="font-size:32px;margin-bottom:8px">⏳</div>
+    <div style="font-size:13px">${msg}</div>
+  </div>`;
+  const bw=document.getElementById('mgr-bid-wrap');
+  if(bw) bw.style.display='none';
+  const st=document.getElementById('mgr-auc-status');
+  if(st) st.textContent=msg;
+}
+
+function renderMgrSpotlight(){
+  const p = mgrAucState.currentPlayer;
+  if(!p){ renderMgrWaiting('Waiting for next player...'); return; }
+
+  const {data:userPromise} = sb.auth.getUser();
+  const isLeading = mgrAucState.currentBidder === (window._mgrUserId||null);
+  const nextBid = parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
+  const canBid  = nextBid <= mgrAucState.myBudget && mgrAucState.mySquad.length < (aucConfig.squad||16);
+  const rcClass = RC[p.r]||'av-0';
+
+  const el=document.getElementById('mgr-spotlight');
+  if(!el) return;
+  el.innerHTML=`
+    <div style="padding:16px;display:flex;gap:14px;align-items:flex-start">
+      <div class="big-av ${rcClass}" style="width:56px;height:56px;font-size:18px;flex-shrink:0">${p.ini}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">${p.t} · ${RN[p.r]||p.r}</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:1px;line-height:1">${p.n}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">Base price ₹${p.base}cr</div>
+      </div>
+    </div>
+    <div style="padding:0 16px 16px">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Current bid</div>
+      <div class="mat-bid-display">₹${mgrAucState.currentBid}<span style="font-size:14px;color:var(--muted);font-family:'DM Sans',sans-serif">cr</span></div>
+      <div style="font-size:12px;margin-top:4px;min-height:18px;${isLeading?'color:var(--green);font-weight:600':'color:var(--muted)'}">
+        ${mgrAucState.currentBidderName
+          ? (isLeading ? '🏆 You are leading!' : '🏆 Leading: '+mgrAucState.currentBidderName)
+          : 'No bids yet — be the first'}
+      </div>
+    </div>`;
+
+  // Update bid button
+  const bw=document.getElementById('mgr-bid-wrap');
+  const bb=document.getElementById('mgr-bid-btn');
+  const bh=document.getElementById('mgr-next-bid');
+  const hint=document.getElementById('mgr-bid-hint');
+  if(!bw||!bb) return;
+  bw.style.display='block';
+  if(bh) bh.textContent=nextBid;
+  if(canBid){
+    bb.disabled=false;
+    bb.style.opacity='1';
+    bb.style.cursor='pointer';
+    if(hint) hint.textContent='Next increment: '+fmtInc(getInc(mgrAucState.currentBid))+' · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr';
+  } else {
+    bb.disabled=true;
+    bb.style.opacity='.35';
+    bb.style.cursor='not-allowed';
+    if(hint) hint.textContent=nextBid>mgrAucState.myBudget?'Insufficient budget':'Squad full';
+  }
+
+  const st=document.getElementById('mgr-auc-status');
+  if(st) st.textContent='On auction: '+p.n;
+}
+
+async function managerPlaceBid(){
+  if(!mgrAucState.auctionId||!mgrAucState.currentPlayer) return;
+  const {data:{user}} = await sb.auth.getUser();
+  window._mgrUserId = user.id;
+  const nextBid = parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
+  if(nextBid > mgrAucState.myBudget){ showToast('Not enough budget','error'); return; }
+
+  // Disable button to prevent double-tap
+  const bb=document.getElementById('mgr-bid-btn');
+  if(bb){ bb.disabled=true; bb.textContent='PLACING BID...'; }
+
+  // Write bid to Supabase — Realtime will broadcast to admin + all managers
+  const {error} = await sb.from('auction_bids').insert({
+    auction_id:  mgrAucState.auctionId,
+    player_id:   mgrAucState.currentPlayer.id,
+    bidder_id:   user.id,
+    amount:      nextBid,
+    is_winning:  true
+  });
+
+  if(error){
+    showToast('Bid failed: '+error.message,'error');
+    if(bb){ bb.disabled=false; bb.innerHTML='BID ₹<span id="mgr-next-bid">'+nextBid+'</span>cr'; }
+    return;
+  }
+
+  // Optimistically update local state
+  mgrAucState.currentBid = nextBid;
+  mgrAucState.currentBidder = user.id;
+  mgrAucState.currentBidderName = CU.name;
+  mgrAucState.myBudget = parseFloat((mgrAucState.myBudget - 0).toFixed(2)); // budget updates on sold
+  document.getElementById('mgr-budget-disp').textContent=mgrAucState.myBudget;
+
+  // Add to local log
+  mgrAddLog('mine','You bid ₹'+nextBid+'cr for '+mgrAucState.currentPlayer.n);
+  renderMgrSpotlight();
+  showToast('Bid placed: ₹'+nextBid+'cr','success');
+}
+
+function mgrAddLog(type, text){
+  const t=new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const logEl=document.getElementById('mat-log');
+  if(!logEl) return;
+  const row=document.createElement('div');
+  row.className='mat-log-row '+type;
+  row.innerHTML=text+'<div style="font-size:9px;color:var(--muted)">'+t+'</div>';
+  logEl.insertBefore(row,logEl.firstChild);
+}
+
+function renderMgrScoreboard(){
+  const sbEl=document.getElementById('mat-sb');
+  if(!sbEl) return;
+  if(!mgrAucState.allManagers.length){
+    sbEl.innerHTML='<div style="padding:12px;color:var(--muted);font-size:11px;text-align:center">Loading...</div>';
+    sb.auth.getUser().then(({data:{user}})=>{
+      sbGetLeagueMembers(mgrAucState.leagueId).then(members=>{
+        mgrAucState.allManagers=members;
+        renderMgrScoreboard();
+      });
+    });
+    return;
+  }
+  sb.auth.getUser().then(({data:{user}})=>{
+    sbEl.innerHTML=mgrAucState.allManagers.map(m=>{
+      const isMe=m.user_id===user.id;
+      const name=m.profiles?.name||'Manager';
+      const ini=(m.profiles?.avatar_ini||name.substring(0,2)).toUpperCase();
+      const av='av-'+(m.profiles?.avatar_idx||0);
+      const bud=parseFloat(m.budget_remaining||0);
+      return`<div class="mat-sb-row ${isMe?'me':''}">
+        <div class="uc-av ${av}" style="width:26px;height:26px;font-size:9px;flex-shrink:0">${ini}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11px;font-weight:500">${name}${isMe?' (You)':''}</div>
+          <div style="font-size:9px;color:var(--muted)">₹${bud}cr left</div>
+        </div>
+      </div>`;
+    }).join('');
+  });
+}
+
+function subscribeToMgrAuction(){
+  // Unsubscribe from any existing channel
+  if(mgrAucState.channel){
+    sb.removeChannel(mgrAucState.channel);
+    mgrAucState.channel=null;
+  }
+  if(!mgrAucState.auctionId) return;
+
+  mgrAucState.channel = sb.channel('mgr-auction-'+mgrAucState.auctionId)
+    // Listen for new bids — update spotlight in real time
+    .on('postgres_changes',{
+      event:'INSERT', schema:'public', table:'auction_bids',
+      filter:'auction_id=eq.'+mgrAucState.auctionId
+    }, async (payload)=>{
+      const bid=payload.new;
+      // Fetch bidder name
+      const {data:prof}=await sb.from('profiles').select('name').eq('id',bid.bidder_id).single();
+      const bidderName=prof?.name||'Someone';
+      const {data:{user}}=await sb.auth.getUser();
+      const isMe=bid.bidder_id===user.id;
+      // Update state
+      if(bid.is_winning){
+        mgrAucState.currentBid=parseFloat(bid.amount);
+        mgrAucState.currentBidder=bid.bidder_id;
+        mgrAucState.currentBidderName=bidderName;
+        renderMgrSpotlight();
+      }
+      mgrAddLog(isMe?'mine':'bid',bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr');
+    })
+    // Listen for queue changes — next player or sold/unsold
+    .on('postgres_changes',{
+      event:'UPDATE', schema:'public', table:'auction_queue',
+      filter:'auction_id=eq.'+mgrAucState.auctionId
+    }, async (payload)=>{
+      const row=payload.new;
+      if(row.status==='sold'){
+        mgrAucState.soldCount++;
+        const soldEl=document.getElementById('mgr-sold-badge');
+        if(soldEl) soldEl.textContent=mgrAucState.soldCount+' Sold';
+        mgrAddLog('sold','Player sold for ₹'+mgrAucState.currentBid+'cr to '+mgrAucState.currentBidderName);
+        // Refresh my squad in case I won
+        await refreshMgrSquad();
+        // Get my updated budget
+        const {data:{user}}=await sb.auth.getUser();
+        const {data:mem}=await sb.from('league_members')
+          .select('budget_remaining').eq('league_id',mgrAucState.leagueId).eq('user_id',user.id).single();
+        mgrAucState.myBudget=parseFloat(mem?.budget_remaining||mgrAucState.myBudget);
+        document.getElementById('mgr-budget-disp').textContent=mgrAucState.myBudget;
+        // Flash animation on spotlight
+        const sp=document.getElementById('mgr-spotlight');
+        if(sp) sp.classList.add('sold-flash');
+        setTimeout(()=>{if(sp)sp.classList.remove('sold-flash');},700);
+      } else if(row.status==='unsold'){
+        mgrAucState.unsoldCount++;
+        const usEl=document.getElementById('mgr-unsold-badge');
+        if(usEl) usEl.textContent=mgrAucState.unsoldCount+' Unsold';
+        mgrAddLog('unsold','Player unsold — no bids');
+      } else if(row.status==='live'){
+        // New player up — refresh current player
+        await refreshMgrCurrentPlayer();
+        await refreshMgrLog();
+      }
+    })
+    .subscribe();
+}
 /* ══════════════════════════════════════════
    MODALS / CONFIRM
 ══════════════════════════════════════════ */
