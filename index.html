@@ -1294,6 +1294,47 @@ async function goToAuctionSetupFromHome(){
   goToAuctionSetup(adminLeagues[adminLeagues.length-1].id);
 }
 
+
+function confirmDeleteLeague(lgId, lgName){
+  showConfirm(
+    '🗑 Delete "'+lgName+'"?',
+    'This permanently deletes the league and ALL associated data: members, auction, bids, squads, scores. This cannot be undone.',
+    ()=>deleteLeague(lgId, lgName)
+  );
+}
+
+async function deleteLeague(lgId, lgName){
+  showToast('Deleting league...','info');
+  try{
+    // Delete in correct dependency order to satisfy foreign keys
+    // 1. auction_bids, auction_queue (depend on auctions)
+    const {data:aucs}=await sb.from('auctions').select('id').eq('league_id',lgId);
+    for(const a of aucs||[]){
+      await sb.from('auction_bids').delete().eq('auction_id',a.id);
+      await sb.from('auction_queue').delete().eq('auction_id',a.id);
+    }
+    // 2. auctions
+    await sb.from('auctions').delete().eq('league_id',lgId);
+    // 3. squads, gw_scores, transfers, notifications, league_members
+    await sb.from('squads').delete().eq('league_id',lgId);
+    await sb.from('gw_scores').delete().eq('league_id',lgId);
+    await sb.from('transfers').delete().eq('league_id',lgId);
+    await sb.from('notifications').delete().eq('league_id',lgId);
+    await sb.from('league_members').delete().eq('league_id',lgId);
+    // 4. The league itself
+    const {error}=await sb.from('leagues').delete().eq('id',lgId);
+    if(error) throw error;
+    // Remove from local cache
+    LEAGUES_DB=LEAGUES_DB.filter(x=>x.id!==lgId);
+    delete LEAGUE_AUCTIONS[lgId];
+    showToast('"'+lgName+'" deleted','success');
+    renderHomeLeagues();
+  }catch(e){
+    console.error('deleteLeague error:',e);
+    showToast('Delete failed: '+e.message,'error');
+  }
+}
+
 async function renderHomeLeagues(){
   if(!CU)return;
   const cont=document.getElementById('home-leagues');
@@ -1313,14 +1354,20 @@ async function renderHomeLeagues(){
       crTiles.innerHTML='';
     } else {
       crTiles.innerHTML = adminLeagues.map(lg=>`
-        <div class="admin-action" onclick="goToAuctionSetup('${lg.id}')"
-          style="border-left:3px solid var(--purple)">
-          <div class="aa-icon" style="background:rgba(139,92,246,.18);flex-shrink:0">🎙️</div>
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:600">${lg.name} — Control Room</div>
-            <div style="font-size:11px;color:var(--muted)">Code: ${lg.code}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">
+          <div class="admin-action" onclick="goToAuctionSetup('${lg.id}')"
+            style="border-left:3px solid var(--purple);flex:1;margin-bottom:0">
+            <div class="aa-icon" style="background:rgba(139,92,246,.18);flex-shrink:0">🎙️</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600">${lg.name} — Control Room</div>
+              <div style="font-size:11px;color:var(--muted)">Code: ${lg.code}</div>
+            </div>
+            <span class="badge b-admin" style="flex-shrink:0">Admin</span>
           </div>
-          <span class="badge b-admin" style="flex-shrink:0">Admin</span>
+          <button class="btn-sm" onclick="event.stopPropagation();confirmDeleteLeague('${lg.id}','${lg.name.replace(/'/g,'')}')"
+            style="font-size:11px;padding:5px 10px;border-color:var(--red);color:var(--red);flex-shrink:0;white-space:nowrap">
+            🗑 Delete
+          </button>
         </div>`).join('');
     }
   }
@@ -1333,7 +1380,10 @@ async function renderHomeLeagues(){
         <div style="font-size:13px;font-weight:600">${lg.name} ${lg.adminId===CU.id?'<span class="badge b-admin">Admin</span>':''}</div>
         <div style="font-size:10px;color:var(--muted);margin-top:2px">GW${lg.gw} · Code: ${lg.code}</div>
       </div>
-      <span class="badge b-green" style="flex-shrink:0">— pts</span>
+      ${lg.adminId===CU.id
+        ?`<button class="btn-sm" onclick="event.stopPropagation();confirmDeleteLeague('${lg.id}','${lg.name.replace(/'/g,'')}')"
+            style="font-size:10px;padding:3px 8px;border-color:var(--red);color:var(--red);flex-shrink:0">🗑</button>`
+        :'<span class="badge b-green" style="flex-shrink:0">— pts</span>'}
     </div>`).join('');
 }
 function renderHomeNotifs(){
@@ -2164,46 +2214,70 @@ async function restartAuction(){
 
   const lgId  = aucConfig.leagueId || controlRoomLeagueId;
   const aucId = aucConfig.auctionId;
+  if(!lgId||!aucId){ showToast('No auction to restart','error'); return; }
 
-  if(lgId && aucId){
-    // 1. Delete all bids for this auction
-    await sb.from('auction_bids').delete().eq('auction_id',aucId);
-    // 2. Reset all queue rows to 'pending'
-    await sb.from('auction_queue').update({status:'pending'}).eq('auction_id',aucId);
-    // 3. Delete all squads for this league
-    await sb.from('squads').delete().eq('league_id',lgId);
-    // 4. Reset all member budgets to original
-    const budget = aucConfig.budget||100;
-    await sb.from('league_members').update({budget_remaining:budget}).eq('league_id',lgId);
-    // 5. Mark auction as pending/live (keep same ID so managers stay subscribed)
-    const resetState = {
-      config:aucConfig, mgrs:aucMgrs.map(m=>({...m,squad:[],budget:budget})),
-      queue:PLAYERS_DATA.map(p=>({...p,soldTo:null,unsold:false,soldPrice:0})),
-      idx:-1, bid:0, top:null, sold:0, unsold:0,
-      logs:[{type:'sys',text:'🔄 Auction restarted by admin',time:new Date().toLocaleTimeString()}],
-      timerMax:aucConfig.timer||30, timerValue:aucConfig.timer||30, timerTs:Date.now()
-    };
-    await sb.from('auctions').update({
-      status:'live', state_json:resetState, started_at:new Date().toISOString()
-    }).eq('id',aucId);
+  const budget = aucConfig.budget||100;
+  const timer  = aucConfig.timer||30;
+
+  // FIX 3B: Re-fetch players from DB to get current base prices (e.g. after SQL update to 1cr)
+  const freshPlayers = await sbGetPlayers();
+  if(freshPlayers.length) PLAYERS_DATA = freshPlayers;
+
+  // 1. Delete all bids
+  await sb.from('auction_bids').delete().eq('auction_id',aucId);
+  // 2. Reset ALL queue rows to pending (clears sold/unsold flags)
+  await sb.from('auction_queue').update({status:'pending'}).eq('auction_id',aucId);
+  // 3. Delete all squads
+  await sb.from('squads').delete().eq('league_id',lgId);
+  // 4. Reset all member budgets
+  await sb.from('league_members').update({budget_remaining:budget}).eq('league_id',lgId);
+
+  // FIX 3A+C: Rebuild aucQueue cleanly from fresh DB players with NO flags
+  // Preserve original queue order from DB (by queue_order column)
+  const {data:qRows}=await sb.from('auction_queue')
+    .select('player_id,queue_order').eq('auction_id',aucId).order('queue_order');
+  if(qRows&&qRows.length){
+    const playerMap={};
+    PLAYERS_DATA.forEach(p=>playerMap[p.id]=p);
+    aucQueue = qRows.map(r=>({
+      ...(playerMap[r.player_id]||{id:r.player_id,n:'Player',t:'?',r:'BAT',ini:'?',base:1}),
+      soldTo:null, unsold:false, soldPrice:0
+    }));
+  } else {
+    aucQueue = PLAYERS_DATA.map(p=>({...p,soldTo:null,unsold:false,soldPrice:0}));
   }
 
-  // Reset local state
-  aucQueue  = PLAYERS_DATA.map(p=>({...p,soldTo:null,unsold:false,soldPrice:0}));
-  aucMgrs   = aucMgrs.map(m=>({...m,squad:[],budget:aucConfig.budget||100}));
-  aucIdx    = -1; aucBid=0; aucTop=null;
-  aucSold   = 0; aucUnsold=0; aucLogs=[];
-  aucPaused = false;
+  // Reset managers
+  aucMgrs = aucMgrs.map(m=>({...m,squad:[],budget}));
 
-  // Update local cache
-  if(lgId) LEAGUE_AUCTIONS[lgId]={inProgress:true,completed:false,config:aucConfig,mgrs:aucMgrs,queue:aucQueue,idx:-1,bid:0,top:null,sold:0,unsold:0,logs:[]};
+  // FIX 3C: Critical — reset aucIdx to -1 BEFORE saving state
+  // nextPlayer() checks aucIdx>=0 and tries to finalize current player
+  // if aucIdx is not -1. Must be clean.
+  aucIdx=-1; aucBid=0; aucTop=null;
+  aucSold=0; aucUnsold=0;
+  aucLogs=[{type:'sys',text:'🔄 Auction restarted by admin',time:new Date().toLocaleTimeString()}];
+  aucPaused=false;
 
-  addLog('sys','🔄 Auction restarted');
+  // 5. Save reset state (same auction ID — managers stay subscribed)
+  const resetState={
+    config:aucConfig, mgrs:aucMgrs, queue:aucQueue,
+    idx:-1, bid:0, top:null, sold:0, unsold:0,
+    logs:aucLogs,
+    timerMax:timer, timerValue:timer, timerTs:Date.now()
+  };
+  await sb.from('auctions').update({
+    status:'live', state_json:resetState, started_at:new Date().toISOString()
+  }).eq('id',aucId);
+
+  if(lgId) LEAGUE_AUCTIONS[lgId]={inProgress:true,completed:false,config:aucConfig,mgrs:aucMgrs,queue:aucQueue,idx:-1,bid:0,top:null,sold:0,unsold:0,logs:aucLogs};
+
+  // Update admin UI
+  addLog('sys','🔄 Auction restarted — '+aucQueue.length+' players queued');
   document.getElementById('a-sold-badge').textContent='0 Sold';
   document.getElementById('a-unsold-badge').textContent='0 Unsold';
   renderQueueList(); renderBiddersBar();
   showAucScreen('waiting');
-  showToast('Auction restarted — click Start to begin','success');
+  showToast('Auction restarted — '+aucQueue.length+' players · click Start','success');
 }
 
 
@@ -2683,7 +2757,17 @@ async function initMgrAuctionTab(){
   // Load recent bids as log
   await refreshMgrLog();
 
-  // BUG 2 FIX: Seed timer from saved state if available
+  // FIX 2: Seed sold/unsold counts from saved state_json
+  if(auc.state_json){
+    mgrAucState.soldCount   = auc.state_json.sold   || 0;
+    mgrAucState.unsoldCount = auc.state_json.unsold || 0;
+    const sEl=document.getElementById('mgr-sold-badge');
+    const uEl=document.getElementById('mgr-unsold-badge');
+    if(sEl) sEl.textContent = mgrAucState.soldCount+' Sold';
+    if(uEl) uEl.textContent = mgrAucState.unsoldCount+' Unsold';
+  }
+
+  // Seed timer from saved state if available
   if(auc.state_json?.timerValue!=null && auc.state_json?.timerTs && auc.status==='live'){
     const elapsed = Math.round((Date.now() - auc.state_json.timerTs)/1000);
     const synced  = Math.max(0, auc.state_json.timerValue - elapsed);
@@ -3110,8 +3194,13 @@ function subscribeToMgrAuction(){
     }, async (payload)=>{
       const row=payload.new;
       if(row.status==='sold'){
-        mgrAucState.soldCount++;
-        stopMgrTimer(); // BUG 2: stop timer on sold
+        // FIX 2: Read authoritative count from state_json instead of local increment
+        const {data:aucSnap}=await sb.from('auctions')
+          .select('state_json').eq('id',mgrAucState.auctionId).single();
+        const snapState=aucSnap?.state_json||{};
+        mgrAucState.soldCount   = snapState.sold   ?? (mgrAucState.soldCount+1);
+        mgrAucState.unsoldCount = snapState.unsold ?? mgrAucState.unsoldCount;
+        stopMgrTimer();
         const soldEl=document.getElementById('mgr-sold-badge');
         if(soldEl) soldEl.textContent=mgrAucState.soldCount+' Sold';
         const wonByMe = mgrAucState.currentBidder===window._mgrUserId;
@@ -3121,8 +3210,14 @@ function subscribeToMgrAuction(){
         // FIX 4: Show sold overlay
         showMgrSoldOv('SOLD', soldMsg, true);
         mgrAddLog('sold','Player sold for ₹'+mgrAucState.currentBid+'cr to '+(mgrAucState.currentBidderName||'?'));
-        // FIX 1+5: Wait for finalizeSold's async upsert to complete, then refresh
-        setTimeout(()=>refreshMgrSquad(), 1500);
+        // FIX 1: Refresh squad immediately and also re-render scorecard if visible
+        // Use 800ms delay to give finalizeSold's upsert time to complete
+        setTimeout(async ()=>{
+          await refreshMgrSquad();
+          // If Scores tab is active, refresh it too
+          const sbEl=document.getElementById('mat-sb');
+          if(sbEl && sbEl.style.display!=='none') renderMgrScoreboard();
+        }, 800);
         // Get my updated budget
         const {data:{user}}=await sb.auth.getUser();
         const {data:mem}=await sb.from('league_members')
@@ -3134,10 +3229,17 @@ function subscribeToMgrAuction(){
         if(sp) sp.classList.add('sold-flash');
         setTimeout(()=>{if(sp)sp.classList.remove('sold-flash');},700);
       } else if(row.status==='unsold'){
-        mgrAucState.unsoldCount++;
-        stopMgrTimer(); // BUG 2: stop timer on unsold
+        // FIX 2: Read authoritative count from state_json
+        const {data:aucSnap2}=await sb.from('auctions')
+          .select('state_json').eq('id',mgrAucState.auctionId).single();
+        const snapState2=aucSnap2?.state_json||{};
+        mgrAucState.unsoldCount = snapState2.unsold ?? (mgrAucState.unsoldCount+1);
+        mgrAucState.soldCount   = snapState2.sold   ?? mgrAucState.soldCount;
+        stopMgrTimer();
         const usEl=document.getElementById('mgr-unsold-badge');
         if(usEl) usEl.textContent=mgrAucState.unsoldCount+' Unsold';
+        const soldEl2=document.getElementById('mgr-sold-badge');
+        if(soldEl2) soldEl2.textContent=mgrAucState.soldCount+' Sold';
         // FIX 4: Show unsold overlay
         showMgrSoldOv('UNSOLD','No bids received',false);
         mgrAddLog('unsold','Player unsold — no bids');
