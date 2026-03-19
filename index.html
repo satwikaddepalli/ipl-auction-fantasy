@@ -1793,7 +1793,11 @@ async function saveAuctionState(status){
   const state = {
     config:aucConfig, mgrs:aucMgrs, queue:aucQueue,
     idx:aucIdx, bid:aucBid, top:aucTop,
-    sold:aucSold, unsold:aucUnsold, logs:aucLogs.slice(0,100)
+    sold:aucSold, unsold:aucUnsold, logs:aucLogs.slice(0,100),
+    // BUG 2 FIX: Store timer info so managers can sync their countdown
+    timerMax:   aucConfig.timer||30,
+    timerValue: aucTimer,
+    timerTs:    Date.now()   // timestamp when this was saved
   };
   await sb.from('auctions').update({
     status: status||'live',
@@ -1933,15 +1937,18 @@ function finalizeSold(){
     sb.from('auction_queue')
       .update({status:'sold'})
       .eq('auction_id',aucConfig.auctionId).eq('player_id',p.id).then();
-    // Clear any previous winning bids for this player, set this one
+    // BUG 1 FIX: Mark ALL bids for this player as not winning,
+    // then insert ONE clean winning bid so there's no ambiguity.
     sb.from('auction_bids')
       .update({is_winning:false})
-      .eq('auction_id',aucConfig.auctionId).eq('player_id',p.id).then(()=>{
-        sb.from('auction_bids').upsert({
-          auction_id:aucConfig.auctionId,player_id:p.id,
-          bidder_id:aucTop,amount:aucBid,is_winning:true,
+      .eq('auction_id',aucConfig.auctionId)
+      .eq('player_id',p.id)
+      .then(()=>{
+        sb.from('auction_bids').insert({
+          auction_id:aucConfig.auctionId, player_id:p.id,
+          bidder_id:aucTop, amount:aucBid, is_winning:true,
           placed_at:new Date().toISOString()
-        },{onConflict:'auction_id,player_id,bidder_id'}).then();
+        }).then();
       });
     // Update winner's budget_remaining
     if(aucConfig.leagueId){
@@ -2588,6 +2595,13 @@ async function initMgrAuctionTab(){
   // Load recent bids as log
   await refreshMgrLog();
 
+  // BUG 2 FIX: Seed timer from saved state if available
+  if(auc.state_json?.timerValue!=null && auc.state_json?.timerTs && auc.status==='live'){
+    const elapsed = Math.round((Date.now() - auc.state_json.timerTs)/1000);
+    const synced  = Math.max(0, auc.state_json.timerValue - elapsed);
+    startMgrTimer(synced, auc.state_json.timerMax||30);
+  }
+
   // Subscribe to realtime updates
   subscribeToMgrAuction();
 
@@ -2661,31 +2675,22 @@ async function refreshMgrLog(){
 async function refreshMgrSquad(){
   if(!mgrAucState.auctionId||!mgrAucState.leagueId) return;
   const {data:{user}} = await sb.auth.getUser();
-  // Get players won by me in this auction (winning bids)
-  const {data:wonBids} = await sb.from('auction_bids')
-    .select('amount,player_id,players(name,role,ipl_team_code)')
-    .eq('auction_id',mgrAucState.auctionId)
-    .eq('bidder_id',user.id)
-    .eq('is_winning',true);
 
-  // Also check squads table for already-saved players
+  // BUG 1 FIX: Use ONLY the squads table as source of truth.
+  // Players are added here only by finalizeSold() on admin side.
+  // This prevents race conditions from is_winning flag duplication.
   const {data:squadRows} = await sb.from('squads')
     .select('bought_price,player_id,players(name,role,ipl_team_code)')
     .eq('league_id',mgrAucState.leagueId)
     .eq('user_id',user.id);
 
-  // Merge — prefer squads table, fall back to winning bids
-  const seen = new Set();
-  const merged = [];
-  (squadRows||[]).forEach(s=>{
-    seen.add(s.player_id);
-    merged.push({name:s.players.name,role:s.players.role,team:s.players.ipl_team_code,price:parseFloat(s.bought_price)});
-  });
-  (wonBids||[]).forEach(b=>{
-    if(!seen.has(b.player_id)){
-      merged.push({name:b.players.name,role:b.players.role,team:b.players.ipl_team_code,price:parseFloat(b.amount)});
-    }
-  });
+  const merged = (squadRows||[]).map(s=>({
+    name:s.players.name,
+    role:s.players.role,
+    team:s.players.ipl_team_code,
+    price:parseFloat(s.bought_price)
+  }));
+
   mgrAucState.mySquad = merged;
 
   const squadEl=document.getElementById('mgr-my-squad');
@@ -2901,6 +2906,38 @@ async function renderMgrScoreboard(){
   sbEl.innerHTML=cards.join('');
 }
 
+
+// BUG 2 FIX: Manager-side countdown timer
+// Runs independently on each manager's browser, seeded from state_json
+let mgrTimerInterval = null;
+let mgrTimerValue    = 0;
+let mgrTimerMax      = 30;
+
+function startMgrTimer(value, max){
+  if(mgrTimerInterval) clearInterval(mgrTimerInterval);
+  mgrTimerValue = value;
+  mgrTimerMax   = max || 30;
+  updateMgrTimerUI();
+  mgrTimerInterval = setInterval(()=>{
+    mgrTimerValue--;
+    if(mgrTimerValue < 0) mgrTimerValue = 0;
+    updateMgrTimerUI();
+  }, 1000);
+}
+
+function stopMgrTimer(){
+  if(mgrTimerInterval){ clearInterval(mgrTimerInterval); mgrTimerInterval=null; }
+}
+
+function updateMgrTimerUI(){
+  const mn = document.getElementById('mgr-timer-num');
+  const mf = document.getElementById('mgr-timer-fg');
+  if(mn) mn.textContent = mgrTimerValue;
+  const offset = 176*(1 - mgrTimerValue/mgrTimerMax);
+  const stroke = mgrTimerValue>10?'var(--green)':mgrTimerValue>5?'var(--gold)':'var(--red)';
+  if(mf){ mf.style.strokeDashoffset=offset; mf.style.stroke=stroke; }
+}
+
 function subscribeToMgrAuction(){
   // Unsubscribe from any existing channel
   if(mgrAucState.channel){
@@ -2927,6 +2964,8 @@ function subscribeToMgrAuction(){
         mgrAucState.currentBidder=bid.bidder_id;
         mgrAucState.currentBidderName=bidderName;
         renderMgrSpotlight();
+        // BUG 2 FIX: Reset timer to 20s on new bid (mirrors admin)
+        startMgrTimer(Math.min(20, mgrTimerMax), mgrTimerMax);
       }
       mgrAddLog(isMe?'mine':'bid',bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr');
     })
@@ -2938,6 +2977,7 @@ function subscribeToMgrAuction(){
       const row=payload.new;
       if(row.status==='sold'){
         mgrAucState.soldCount++;
+        stopMgrTimer(); // BUG 2: stop timer on sold
         const soldEl=document.getElementById('mgr-sold-badge');
         if(soldEl) soldEl.textContent=mgrAucState.soldCount+' Sold';
         mgrAddLog('sold','Player sold for ₹'+mgrAucState.currentBid+'cr to '+mgrAucState.currentBidderName);
@@ -2955,13 +2995,16 @@ function subscribeToMgrAuction(){
         setTimeout(()=>{if(sp)sp.classList.remove('sold-flash');},700);
       } else if(row.status==='unsold'){
         mgrAucState.unsoldCount++;
+        stopMgrTimer(); // BUG 2: stop timer on unsold
         const usEl=document.getElementById('mgr-unsold-badge');
         if(usEl) usEl.textContent=mgrAucState.unsoldCount+' Unsold';
         mgrAddLog('unsold','Player unsold — no bids');
       } else if(row.status==='live'){
-        // New player up — refresh current player
+        // New player up — refresh current player and start timer
         await refreshMgrCurrentPlayer();
         await refreshMgrLog();
+        // BUG 2 FIX: Start manager's own countdown from the configured timer
+        startMgrTimer(aucConfig.timer||mgrTimerMax, aucConfig.timer||mgrTimerMax);
       }
     })
     // FIX 5: Listen for auction state changes (paused, log updates, next player)
@@ -2975,9 +3018,16 @@ function subscribeToMgrAuction(){
       const statusEl=document.getElementById('mgr-auc-status');
       if(updated.status==='paused'){
         if(statusEl) statusEl.textContent='⏸ Auction paused by admin';
+        stopMgrTimer();
         mgrAddLog('sys','Auction paused');
-      } else if(updated.status==='live' && state.idx===mgrAucState._lastIdx){
+      } else if(updated.status==='live'){
         if(statusEl&&mgrAucState.currentPlayer) statusEl.textContent='On auction: '+mgrAucState.currentPlayer.n;
+        // BUG 2 FIX: Resync timer from state — account for elapsed time since save
+        if(state.timerValue!=null && state.timerTs){
+          const elapsed = Math.round((Date.now() - state.timerTs)/1000);
+          const synced  = Math.max(0, state.timerValue - elapsed);
+          startMgrTimer(synced, state.timerMax||30);
+        }
         mgrAddLog('sys','Auction resumed');
       }
       // Sync shared log — show any entries the manager missed
