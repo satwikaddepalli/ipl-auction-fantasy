@@ -3003,21 +3003,19 @@ async function renderFixtures(){
   document.getElementById('fix-list').innerHTML=Object.entries(byDate).map(([date,fx])=>`
     <div class="fix-gw-hdr">${date}</div>
     ${fx.map(f=>{
+      const mNo = f.matchNo||f.id||'';
       const cnt=xiTeams.filter(t=>t===f.home||t===f.away).length;
       const has=cnt>0;
       return`<div class="fix-row ${has?'has-p':''}">
-        <div style="display:flex;align-items:center;gap:8px;min-width:0">
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--muted);flex-shrink:0">M${f.matchNo}</span>
-          <div style="min-width:0">
-            <div style="font-size:13px;font-weight:600;${has?'color:var(--gold)':''}">${f.home} vs ${f.away}</div>
-            <div style="font-size:10px;color:var(--muted)">${f.time} · ${f.venue}</div>
-            ${has
-              ?`<div style="font-size:10px;color:var(--gold);margin-top:2px">You have <strong>${cnt}</strong> XI player${cnt>1?'s':''}</div>`
-              :`<div style="font-size:10px;color:var(--muted);margin-top:2px">No XI players</div>`
-            }
-          </div>
+        <div style="min-width:0;flex:1">
+          <div style="font-size:13px;font-weight:600;${has?'color:var(--gold)':''}">${f.home} vs ${f.away}</div>
+          <div style="font-size:10px;color:var(--muted)">${f.time} · ${f.venue}</div>
+          ${has
+            ?`<div style="font-size:10px;color:var(--gold);margin-top:2px">You have <strong>${cnt}</strong> XI player${cnt>1?'s':''}</div>`
+            :`<div style="font-size:10px;color:var(--muted);margin-top:2px">No XI players</div>`
+          }
         </div>
-        <span class="badge b-blue" style="flex-shrink:0">Match ${f.matchNo}</span>
+        <span class="badge b-blue" style="flex-shrink:0">${mNo?'Match '+mNo:''}</span>
       </div>`;
     }).join('')}`
   ).join('');
