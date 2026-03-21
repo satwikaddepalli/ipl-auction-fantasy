@@ -3048,14 +3048,18 @@ function renderMgrSpotlight(){
   if(!p){ renderMgrWaiting('Waiting for next player...'); return; }
 
   const {data:userPromise} = sb.auth.getUser();
-  const isLeading = mgrAucState.currentBidder === (window._mgrUserId||null);
-  // FIX 1+2: noBidsYet = nobody has bid yet (currentBidder null AND bid == base)
-  // Once anyone bids, all other managers see base+increment as next bid.
-  const noBidsYet = !mgrAucState.currentBidder;
+  const myId      = window._mgrUserId || null;
+  const isLeading = !!mgrAucState.currentBidder && mgrAucState.currentBidder === myId;
+  const noBidsYet = !mgrAucState.currentBidder;   // true = nobody has bid yet
+
+  // nextBid:
+  //  • No bids yet  → bid AT base price (opening bid)
+  //  • Someone bid  → bid at currentBid + increment (works for both leader & others)
   const nextBid = noBidsYet
-    ? mgrAucState.currentBid   // first bid is AT base price
+    ? parseFloat(mgrAucState.currentBid.toFixed(2))
     : parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
-  const canBid  = !isLeading
+
+  const canBid = !isLeading
     && nextBid <= mgrAucState.myBudget
     && mgrAucState.mySquad.length < (aucConfig.squad||16);
   const rcClass = RC[p.r]||'av-0';
@@ -3110,14 +3114,17 @@ function renderMgrSpotlight(){
     bb.style.opacity='1';
     bb.style.cursor='pointer';
     if(hint) hint.textContent = noBidsYet
-      ? 'Opening bid · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr'
-      : 'Next increment: '+fmtInc(getInc(mgrAucState.currentBid))+' · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr';
+      ? 'Opening bid at base price · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr'
+      : 'Increment: '+fmtInc(getInc(mgrAucState.currentBid))+' · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr';
   } else {
     bb.disabled=true;
     bb.style.opacity='.35';
     bb.style.cursor='not-allowed';
-    if(hint) hint.textContent=isLeading?'You are currently leading — wait for another bid':'Squad full';
-    if(hint && nextBid>mgrAucState.myBudget) hint.textContent='Insufficient budget';
+    if(hint){
+      if(isLeading) hint.textContent='You are leading — wait for another bid';
+      else if(nextBid>mgrAucState.myBudget) hint.textContent='Insufficient budget';
+      else hint.textContent='Squad full';
+    }
   }
 
   const st=document.getElementById('mgr-auc-status');
@@ -3128,11 +3135,16 @@ async function managerPlaceBid(){
   if(!mgrAucState.auctionId||!mgrAucState.currentPlayer) return;
   const {data:{user}} = await sb.auth.getUser();
   window._mgrUserId = user.id;
-  // FIX 1+2: First bid at base, subsequent bids add increment
+  // Bid amount: opening bid is AT base; subsequent bids add increment
   const noBidsYet = !mgrAucState.currentBidder;
-  const nextBid = noBidsYet
-    ? mgrAucState.currentBid
+  const nextBid   = noBidsYet
+    ? parseFloat(mgrAucState.currentBid.toFixed(2))
     : parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
+
+  // Guard: leading manager cannot bid again
+  if(mgrAucState.currentBidder === user.id){
+    showToast('You are already leading this bid','info'); return;
+  }
   if(nextBid > mgrAucState.myBudget){ showToast('Not enough budget','error'); return; }
   if(mgrAucState.mySquad.length >= (aucConfig.squad||16)){ showToast('Squad full!','error'); return; }
 
@@ -3298,21 +3310,31 @@ function subscribeToMgrAuction(){
       filter:'auction_id=eq.'+mgrAucState.auctionId
     }, async (payload)=>{
       const bid=payload.new;
-      // Fetch bidder name
-      const {data:prof}=await sb.from('profiles').select('name').eq('id',bid.bidder_id).single();
-      const bidderName=prof?.name||'Someone';
       const {data:{user}}=await sb.auth.getUser();
       const isMe=bid.bidder_id===user.id;
-      // Update state
-      if(bid.is_winning){
-        mgrAucState.currentBid=parseFloat(bid.amount);
-        mgrAucState.currentBidder=bid.bidder_id;
-        mgrAucState.currentBidderName=bidderName;
+      const newAmount=parseFloat(bid.amount);
+
+      // Fetch bidder name
+      const {data:prof}=await sb.from('profiles').select('name').eq('id',bid.bidder_id).single();
+      const bidderName=prof?.name||(isMe?CU.name:'Someone');
+
+      // Only update state if this is a higher bid than current
+      // (first bid at base, or outbid). Same amount means a tie —
+      // admin keeps first winner; manager screen ignores duplicate.
+      if(newAmount > mgrAucState.currentBid ||
+        (newAmount === mgrAucState.currentBid && !mgrAucState.currentBidder)){
+        // This is the new leading bid
+        mgrAucState.currentBid         = newAmount;
+        mgrAucState.currentBidder      = bid.bidder_id;
+        mgrAucState.currentBidderName  = bidderName;
         renderMgrSpotlight();
-        // BUG 2 FIX: Reset timer to 20s on new bid (mirrors admin)
         startMgrTimer(Math.min(20, mgrTimerMax), mgrTimerMax);
+      } else if(newAmount === mgrAucState.currentBid && mgrAucState.currentBidder !== bid.bidder_id){
+        // Tie — log it but don't change leader
+        mgrAddLog('bid', bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr (tied — first wins)');
+        return;
       }
-      mgrAddLog(isMe?'mine':'bid',bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr');
+      mgrAddLog(isMe?'mine':'bid', bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr');
     })
     // Listen for queue changes — next player or sold/unsold
     .on('postgres_changes',{
