@@ -1045,28 +1045,28 @@ const AVAIL_PLAYERS=[
 ];
 const LB_MANAGERS=[]; // mock data removed — league tab uses real Supabase data
 const FIXTURES=[
-  {gw:1,home:'RCB',away:'SRH',date:'28 Mar',time:'7:30 PM',venue:'Bengaluru',status:'scheduled'},
-  {gw:1,home:'MI',away:'KKR',date:'29 Mar',time:'7:30 PM',venue:'Mumbai',status:'scheduled'},
-  {gw:2,home:'RR',away:'CSK',date:'30 Mar',time:'7:30 PM',venue:'Guwahati',status:'scheduled'},
-  {gw:2,home:'PBKS',away:'GT',date:'31 Mar',time:'7:30 PM',venue:'New Chandigarh',status:'scheduled'},
-  {gw:3,home:'LSG',away:'DC',date:'1 Apr',time:'7:30 PM',venue:'Lucknow',status:'scheduled'},
-  {gw:3,home:'KKR',away:'SRH',date:'2 Apr',time:'7:30 PM',venue:'Kolkata',status:'scheduled'},
-  {gw:4,home:'CSK',away:'PBKS',date:'3 Apr',time:'7:30 PM',venue:'Chennai',status:'scheduled'},
-  {gw:4,home:'DC',away:'MI',date:'4 Apr',time:'3:30 PM',venue:'Delhi',status:'scheduled'},
-  {gw:4,home:'GT',away:'RR',date:'4 Apr',time:'7:30 PM',venue:'Ahmedabad',status:'scheduled'},
-  {gw:5,home:'SRH',away:'LSG',date:'5 Apr',time:'3:30 PM',venue:'Hyderabad',status:'scheduled'},
-  {gw:5,home:'RCB',away:'CSK',date:'5 Apr',time:'7:30 PM',venue:'Bengaluru',status:'scheduled'},
-  {gw:6,home:'KKR',away:'PBKS',date:'6 Apr',time:'7:30 PM',venue:'Kolkata',status:'scheduled'},
-  {gw:6,home:'RR',away:'MI',date:'7 Apr',time:'7:30 PM',venue:'Guwahati',status:'scheduled'},
-  {gw:7,home:'DC',away:'GT',date:'8 Apr',time:'7:30 PM',venue:'Delhi',status:'scheduled'},
-  {gw:7,home:'KKR',away:'LSG',date:'9 Apr',time:'7:30 PM',venue:'Kolkata',status:'scheduled'},
-  {gw:8,home:'RR',away:'RCB',date:'10 Apr',time:'7:30 PM',venue:'Guwahati',status:'scheduled'},
-  {gw:8,home:'PBKS',away:'SRH',date:'11 Apr',time:'3:30 PM',venue:'New Chandigarh',status:'scheduled'},
-  {gw:8,home:'CSK',away:'DC',date:'11 Apr',time:'7:30 PM',venue:'Chennai',status:'scheduled'},
-  {gw:9,home:'LSG',away:'GT',date:'12 Apr',time:'3:30 PM',venue:'Lucknow',status:'scheduled'},
-  {gw:9,home:'MI',away:'RCB',date:'12 Apr',time:'7:30 PM',venue:'Mumbai',status:'scheduled'}
+  {matchNo:1, home:'RCB', away:'SRH', date:'28 Mar',time:'7:30 PM', venue:'Bengaluru',      status:'scheduled'},
+  {matchNo:2, home:'MI',  away:'KKR', date:'29 Mar',time:'7:30 PM', venue:'Mumbai',          status:'scheduled'},
+  {matchNo:3, home:'RR',  away:'CSK', date:'30 Mar',time:'7:30 PM', venue:'Guwahati',        status:'scheduled'},
+  {matchNo:4, home:'PBKS',away:'GT',  date:'31 Mar',time:'7:30 PM', venue:'New Chandigarh',  status:'scheduled'},
+  {matchNo:5, home:'LSG', away:'DC',  date:'1 Apr', time:'7:30 PM', venue:'Lucknow',         status:'scheduled'},
+  {matchNo:6, home:'KKR', away:'SRH', date:'2 Apr', time:'7:30 PM', venue:'Kolkata',         status:'scheduled'},
+  {matchNo:7, home:'CSK', away:'PBKS',date:'3 Apr', time:'7:30 PM', venue:'Chennai',         status:'scheduled'},
+  {matchNo:8, home:'DC',  away:'MI',  date:'4 Apr', time:'3:30 PM', venue:'Delhi',           status:'scheduled'},
+  {matchNo:9, home:'GT',  away:'RR',  date:'4 Apr', time:'7:30 PM', venue:'Ahmedabad',       status:'scheduled'},
+  {matchNo:10,home:'SRH', away:'LSG', date:'5 Apr', time:'3:30 PM', venue:'Hyderabad',       status:'scheduled'},
+  {matchNo:11,home:'RCB', away:'CSK', date:'5 Apr', time:'7:30 PM', venue:'Bengaluru',       status:'scheduled'},
+  {matchNo:12,home:'KKR', away:'PBKS',date:'6 Apr', time:'7:30 PM', venue:'Kolkata',         status:'scheduled'},
+  {matchNo:13,home:'RR',  away:'MI',  date:'7 Apr', time:'7:30 PM', venue:'Guwahati',        status:'scheduled'},
+  {matchNo:14,home:'DC',  away:'GT',  date:'8 Apr', time:'7:30 PM', venue:'Delhi',           status:'scheduled'},
+  {matchNo:15,home:'KKR', away:'LSG', date:'9 Apr', time:'7:30 PM', venue:'Kolkata',         status:'scheduled'},
+  {matchNo:16,home:'RR',  away:'RCB', date:'10 Apr',time:'7:30 PM', venue:'Guwahati',        status:'scheduled'},
+  {matchNo:17,home:'PBKS',away:'SRH', date:'11 Apr',time:'3:30 PM', venue:'New Chandigarh',  status:'scheduled'},
+  {matchNo:18,home:'CSK', away:'DC',  date:'11 Apr',time:'7:30 PM', venue:'Chennai',         status:'scheduled'},
+  {matchNo:19,home:'LSG', away:'GT',  date:'12 Apr',time:'3:30 PM', venue:'Lucknow',         status:'scheduled'},
+  {matchNo:20,home:'MI',  away:'RCB', date:'12 Apr',time:'7:30 PM', venue:'Mumbai',          status:'scheduled'}
 ];
-// ↑ IPL 2026 fixtures (fallback when Supabase unavailable)
+// ↑ IPL 2026 fixtures — id = match number (fallback when Supabase unavailable)
 const RC={BAT:'av-bat',BWL:'av-bwl',AR:'av-ar',WK:'av-wk'};
 const RN={BAT:'Batsman',BWL:'Bowler',AR:'All-rounder',WK:'Wicketkeeper'};
 const TIER_STEPS=[
@@ -1267,9 +1267,11 @@ async function sbGetFixtures(){
   const {data,error} = await sb.from('matches').select('*').order('match_date').order('match_time');
   if(error){console.error('sbGetFixtures',error);return [];}
   return data.map(m=>({
-    gw:m.gw, home:m.home_team, away:m.away_team,
-    date:new Date(m.match_date).toLocaleDateString('en-IN',{day:'numeric',month:'short'}),
-    time:(m.match_time||'19:30:00').substring(0,5), venue:m.venue||'TBD', status:m.status
+    matchNo: m.id,
+    home: m.home_team, away: m.away_team,
+    date: new Date(m.match_date).toLocaleDateString('en-IN',{day:'numeric',month:'short'}),
+    time: (m.match_time||'19:30:00').substring(0,5),
+    venue: m.venue||'TBD', status: m.status
   }));
 }
 async function sbGetGWScores(leagueId, userId){
@@ -2732,7 +2734,7 @@ function applyAutoSort(){
   captain=pnext[0]?.id||xi[0]?.id;
   viceCaptain=pnext[1]?.id||xi[1]?.id;
 }
-function getNextFTeams(){const f=FIXTURES.find(x=>x.gw>=curGW);return f?[f.home,f.away]:[];}
+function getNextFTeams(){const f=FIXTURES.find(x=>x.status==='scheduled');return f?[f.home,f.away]:[];}
 function renderSquadFull(){
   renderPitch();renderSquadTable();renderRoleDist();renderTeamSpread();
   // FIX 5: Update stat cards with real values
@@ -2989,10 +2991,36 @@ async function renderFixtures(){
   const xiTeams=squad.filter(p=>p.xi).map(p=>p.t);
   if(!FIXTURES_DATA.length){FIXTURES_DATA=await sbGetFixtures();}
   const fixturesArr=FIXTURES_DATA.length?FIXTURES_DATA:FIXTURES;
-  const byGW={};fixturesArr.forEach(f=>{if(!byGW[f.gw])byGW[f.gw]=[];byGW[f.gw].push(f);});
-  document.getElementById('fix-list').innerHTML=Object.entries(byGW).map(([gw,fx])=>`
-    <div class="fix-gw-hdr">Gameweek ${gw}</div>
-    ${fx.map(f=>{const cnt=xiTeams.filter(t=>t===f.home||t===f.away).length;const has=cnt>0;return`<div class="fix-row ${has?'has-p':''}"><div><div style="font-size:13px;font-weight:600;${has?'color:var(--gold)':''}">${f.home} vs ${f.away}</div><div style="font-size:10px;color:var(--muted)">${f.date} · ${f.time} · ${f.venue}</div>${has?`<div style="font-size:10px;color:var(--gold);margin-top:2px">You have <strong>${cnt}</strong> XI player${cnt>1?'s':''} in this match</div>`:'<div style="font-size:10px;color:var(--muted);margin-top:2px">No XI players</div>'}</div><span class="badge ${parseInt(gw)<=curGW?'b-red':'b-blue'}">GW${gw}</span></div>`;}).join('')}`).join('');
+
+  // Group by date for section headers
+  const byDate={};
+  fixturesArr.forEach(f=>{
+    const key=f.date;
+    if(!byDate[key]) byDate[key]=[];
+    byDate[key].push(f);
+  });
+
+  document.getElementById('fix-list').innerHTML=Object.entries(byDate).map(([date,fx])=>`
+    <div class="fix-gw-hdr">${date}</div>
+    ${fx.map(f=>{
+      const cnt=xiTeams.filter(t=>t===f.home||t===f.away).length;
+      const has=cnt>0;
+      return`<div class="fix-row ${has?'has-p':''}">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--muted);flex-shrink:0">M${f.matchNo}</span>
+          <div style="min-width:0">
+            <div style="font-size:13px;font-weight:600;${has?'color:var(--gold)':''}">${f.home} vs ${f.away}</div>
+            <div style="font-size:10px;color:var(--muted)">${f.time} · ${f.venue}</div>
+            ${has
+              ?`<div style="font-size:10px;color:var(--gold);margin-top:2px">You have <strong>${cnt}</strong> XI player${cnt>1?'s':''}</div>`
+              :`<div style="font-size:10px;color:var(--muted);margin-top:2px">No XI players</div>`
+            }
+          </div>
+        </div>
+        <span class="badge b-blue" style="flex-shrink:0">Match ${f.matchNo}</span>
+      </div>`;
+    }).join('')}`
+  ).join('');
 }
 // LEAGUE — with expandable player dropdown per manager
 let lbExpandedOverall=null;
