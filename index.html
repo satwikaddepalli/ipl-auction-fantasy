@@ -782,7 +782,8 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
       <!-- Squad progress -->
       <div class="card">
         <div class="card-hdr"><span class="card-title">My Squad</span><span class="badge b-blue" id="mgr-squad-count">0 players</span></div>
-        <div style="padding:8px" id="mgr-my-squad">
+        <!-- FIX 3: scrollable, shows ALL players -->
+        <div style="max-height:320px;overflow-y:auto" id="mgr-my-squad">
           <div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>
         </div>
       </div>
@@ -1905,16 +1906,24 @@ function subscribeAdminToAuction(){
       filter:'auction_id=eq.'+aucConfig.auctionId
     }, async (payload)=>{
       const bid = payload.new;
-      if(!bid.is_winning) return;
-      // Find manager — may be a real user not in aucMgrs if they bid from their screen
+      // FIX 1: Accept all bids (is_winning=false now); determine winner by amount+time
       let m = aucMgrs.find(x=>x.id===bid.bidder_id);
       if(!m){
-        // Fetch name from profiles
         const {data:prof} = await sb.from('profiles').select('name').eq('id',bid.bidder_id).single();
         m = {id:bid.bidder_id, name:prof?.name||'Manager', ini:'MG', av:'av-0', budget:0, squad:[]};
         aucMgrs.push(m);
       }
-      aucBid = parseFloat(bid.amount);
+      const newAmount = parseFloat(bid.amount);
+      // Only update if this is a higher bid than current
+      if(newAmount < aucBid) return;
+      // If same amount, first bid wins — keep existing aucTop
+      if(newAmount === aucBid && aucTop !== null){
+        addLog('bid', m.name+' bid ₹'+bid.amount+'cr (tied — first bid wins)');
+        saveAuctionState('live');
+        return;
+      }
+      // New highest bid
+      aucBid = newAmount;
       aucTop = bid.bidder_id;
       startAucTimer(Math.min(20,aucConfig.timer));
       addLog('bid', m.name+' bid ₹'+bid.amount+'cr');
@@ -3006,9 +3015,15 @@ function renderMgrSpotlight(){
 
   const {data:userPromise} = sb.auth.getUser();
   const isLeading = mgrAucState.currentBidder === (window._mgrUserId||null);
-  const nextBid = parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
-  // FIX 1: Disable bid if already leading, insufficient budget, or squad full
-  const canBid  = !isLeading && nextBid <= mgrAucState.myBudget && mgrAucState.mySquad.length < (aucConfig.squad||16);
+  // FIX 2: First bid is AT base price; subsequent bids add increment
+  const noBidsYet = !mgrAucState.currentBidder;
+  const nextBid = noBidsYet
+    ? mgrAucState.currentBid   // bid AT the base price
+    : parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
+  // FIX 1+5: Disable if leading, budget insufficient, or squad full
+  const canBid  = !isLeading
+    && nextBid <= mgrAucState.myBudget
+    && mgrAucState.mySquad.length < (aucConfig.squad||16);
   const rcClass = RC[p.r]||'av-0';
 
   const el=document.getElementById('mgr-spotlight');
@@ -3052,7 +3067,9 @@ function renderMgrSpotlight(){
     bb.disabled=false;
     bb.style.opacity='1';
     bb.style.cursor='pointer';
-    if(hint) hint.textContent='Next increment: '+fmtInc(getInc(mgrAucState.currentBid))+' · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr';
+    if(hint) hint.textContent = noBidsYet
+      ? 'Opening bid · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr'
+      : 'Next increment: '+fmtInc(getInc(mgrAucState.currentBid))+' · Budget after: ₹'+parseFloat((mgrAucState.myBudget-nextBid).toFixed(1))+'cr';
   } else {
     bb.disabled=true;
     bb.style.opacity='.35';
@@ -3069,8 +3086,13 @@ async function managerPlaceBid(){
   if(!mgrAucState.auctionId||!mgrAucState.currentPlayer) return;
   const {data:{user}} = await sb.auth.getUser();
   window._mgrUserId = user.id;
-  const nextBid = parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
+  // FIX 2: First bid is AT base price; subsequent bids add increment
+  const noBidsYet = !mgrAucState.currentBidder;
+  const nextBid = noBidsYet
+    ? mgrAucState.currentBid
+    : parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
   if(nextBid > mgrAucState.myBudget){ showToast('Not enough budget','error'); return; }
+  if(mgrAucState.mySquad.length >= (aucConfig.squad||16)){ showToast('Squad full!','error'); return; }
 
   // FIX 2: Show spinner, keep button visible but loading
   const bb      = document.getElementById('mgr-bid-btn');
@@ -3082,19 +3104,16 @@ async function managerPlaceBid(){
   if(amtSpan) amtSpan.style.display='none';
   if(spinner) spinner.style.display='block';
 
-  // Clear previous winning bid then insert new one
-  await sb.from('auction_bids')
-    .update({is_winning:false})
-    .eq('auction_id',mgrAucState.auctionId)
-    .eq('player_id',mgrAucState.currentPlayer.id)
-    .eq('is_winning',true);
-
+  // FIX 1: Insert bid with precise timestamp — DO NOT clear others' bids.
+  // Admin Realtime handler picks the winner by earliest placed_at at highest amount.
+  // is_winning=true only set by finalizeSold on admin side.
   const {error} = await sb.from('auction_bids').insert({
     auction_id:  mgrAucState.auctionId,
     player_id:   mgrAucState.currentPlayer.id,
     bidder_id:   user.id,
     amount:      nextBid,
-    is_winning:  true
+    is_winning:  false,   // admin decides final winner
+    placed_at:   new Date().toISOString()
   });
 
   // FIX 2: Always restore button regardless of outcome
@@ -3172,7 +3191,8 @@ async function renderMgrScoreboard(){
         <div class="sb-stat"><div class="sv" style="color:var(--gold)">${players.length}</div><div class="sl">Players</div></div>
       </div>
       <div style="padding:5px">
-        ${players.slice(0,5).map(p=>{
+        <div style="max-height:200px;overflow-y:auto">
+        ${players.map(p=>{
           const ini2=p.players.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase();
           return '<div class="sb-sq-row">'
             +'<div class="sb-sq-av '+(roleBg2[p.players.role]||'av-0')+'">'+ini2+'</div>'
@@ -3181,8 +3201,8 @@ async function renderMgrScoreboard(){
             +'<span style="font-family:\'Bebas Neue\',sans-serif;font-size:11px;color:var(--gold)">₹'+p.bought_price+'cr</span>'
             +'</div>';
         }).join('')}
-        ${players.length>5?`<div style="font-size:9px;color:var(--muted);padding:3px 5px">+${players.length-5} more</div>`:''}
         ${!players.length?'<div style="font-size:10px;color:var(--muted);padding:6px">No players won yet</div>':''}
+        </div>
       </div>
     </div>`;  }));
 
