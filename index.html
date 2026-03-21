@@ -654,7 +654,8 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
     </div>
     <div class="nav-right">
       <div class="nfb"><span class="tm" id="d-match">MI vs RCB</span><span class="ct ok" id="d-timer">2h 14m</span></div>
-      <span class="badge b-gold">₹<span id="d-budget">31.5</span>cr</span>
+      <!-- FIX 4: Budget moved to squad stat card, removed from nav -->
+      <span id="d-budget" style="display:none">31.5</span>
       <div class="uchip" onclick="goHome()">
         <div class="uc-av av-0" id="d-chip-av">RX</div>
         <span id="d-chip-name">You</span>
@@ -663,11 +664,11 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
   </div>
   <div id="tab-squad" class="page active">
   <div class="scroll"><div class="pg-wrap">
-    <div class="stat-row">
-      <div class="stat-card"><div class="sv" style="color:var(--gold)">312</div><div class="sl">Total pts</div><div class="sb" style="color:var(--green)">↑ +48 GW3</div></div>
-      <div class="stat-card"><div class="sv" style="color:var(--green)">₹31.5cr</div><div class="sl">Budget left</div><div class="sb" style="color:var(--muted)">₹68.5cr spent</div></div>
-      <div class="stat-card"><div class="sv" style="color:var(--accent)">16</div><div class="sl">Squad size</div><div class="sb" style="color:var(--muted)">11 in XI</div></div>
-      <div class="stat-card"><div class="sv" style="color:var(--purple)">2nd</div><div class="sl">Rank</div><div class="sb" style="color:var(--muted)">of 5 managers</div></div>
+    <div class="stat-row" id="squad-stat-row">
+      <div class="stat-card"><div class="sv" style="color:var(--gold)" id="sc-pts">—</div><div class="sl">Total pts</div><div class="sb" id="sc-pts-sub" style="color:var(--green)"></div></div>
+      <div class="stat-card"><div class="sv" style="color:var(--green)" id="sc-budget">—</div><div class="sl">Purse left</div><div class="sb" id="sc-budget-sub" style="color:var(--muted)"></div></div>
+      <div class="stat-card"><div class="sv" style="color:var(--accent)" id="sc-squad">—</div><div class="sl">Squad size</div><div class="sb" id="sc-squad-sub" style="color:var(--muted)">11 in XI</div></div>
+      <div class="stat-card"><div class="sv" style="color:var(--purple)" id="sc-rank">—</div><div class="sl">Rank</div><div class="sb" id="sc-rank-sub" style="color:var(--muted)"></div></div>
     </div>
     <div class="two-col">
       <div>
@@ -743,7 +744,11 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
         <span style="font-size:13px;font-weight:600" id="mgr-auc-status">Waiting for auction to start...</span>
         <span class="badge b-green" id="mgr-sold-badge" style="display:none">0 Sold</span>
         <span class="badge b-red" id="mgr-unsold-badge" style="display:none">0 Unsold</span>
-        <span class="badge b-gold" style="margin-left:auto">₹<span id="mgr-budget-disp">—</span>cr left</span>
+        <!-- FIX 3: Highlighted budget display -->
+        <div style="margin-left:auto;background:rgba(245,166,35,.15);border:1px solid var(--gold);border-radius:8px;padding:5px 12px;display:flex;align-items:baseline;gap:4px">
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--gold);line-height:1">₹<span id="mgr-budget-disp">—</span>cr</span>
+          <span style="font-size:10px;color:var(--muted)">purse left</span>
+        </div>
       </div>
 
       <!-- Current player spotlight -->
@@ -2492,7 +2497,20 @@ function applyAutoSort(){
   viceCaptain=pnext[1]?.id||xi[1]?.id;
 }
 function getNextFTeams(){const f=FIXTURES.find(x=>x.gw>=curGW);return f?[f.home,f.away]:[];}
-function renderSquadFull(){renderPitch();renderSquadTable();renderRoleDist();renderTeamSpread();}
+function renderSquadFull(){
+  renderPitch();renderSquadTable();renderRoleDist();renderTeamSpread();
+  // FIX 5: Update stat cards with real values
+  const lg=CL_ID?LEAGUES_DB.find(x=>x.id===CL_ID):null;
+  const origBudget=parseFloat(lg?.budget_per_team||lg?.budget||100);
+  const spent=squad.reduce((s,p)=>s+(parseFloat(p.price||p.soldPrice||0)),0);
+  const left=parseFloat((dbBudget).toFixed(1));
+  const ptEl=document.getElementById('sc-pts');       if(ptEl) ptEl.textContent='—';
+  const bEl=document.getElementById('sc-budget');     if(bEl)  bEl.textContent='₹'+left+'cr';
+  const bSubEl=document.getElementById('sc-budget-sub'); if(bSubEl) bSubEl.textContent='₹'+parseFloat(spent.toFixed(1))+'cr spent';
+  const sEl=document.getElementById('sc-squad');      if(sEl)  sEl.textContent=squad.length;
+  const sSubEl=document.getElementById('sc-squad-sub'); if(sSubEl) sSubEl.textContent=squad.filter(p=>p.xi).length+' in XI';
+  const rEl=document.getElementById('sc-rank');       if(rEl)  rEl.textContent='—';
+}
 function renderPitch(){
   const xi=squad.filter(p=>p.xi),bench=squad.filter(p=>!p.xi);
   const byR={WK:[],BAT:[],AR:[],BWL:[]};xi.forEach(p=>byR[p.r].push(p));
@@ -2621,70 +2639,86 @@ async function renderFixtures(){
 // LEAGUE — with expandable player dropdown per manager
 let lbExpandedOverall=null;
 let lbExpandedGW=null;
-function getManagerSquad(m){
-  // If auction completed, pull from LEAGUE_AUCTIONS; else use demo pts
-  const aucData=CL_ID&&LEAGUE_AUCTIONS[CL_ID];
-  if(aucData&&aucData.completed){
-    // Try to find by member index
-    const lg=LEAGUES_DB.find(x=>x.id===CL_ID);
-    if(lg){
-      const idx=LB_MANAGERS.findIndex(x=>x.id===m.id);
-      const uid=lg.members[idx];
-      const sq=aucData['squad_'+uid];
-      if(sq&&sq.length)return sq;
-    }
-  }
-  // Fallback: generate plausible demo players from SQUAD_DATA
-  return SQUAD_DATA.map(p=>({...p,price:p.price}));
+// Cache for manager squads fetched from Supabase
+const _mgrSquadCache = {};
+
+async function fetchManagerSquad(userId){
+  if(!CL_ID) return [];
+  const key = CL_ID+'_'+userId;
+  if(_mgrSquadCache[key]) return _mgrSquadCache[key];
+  const {data,error} = await sb.from('squads')
+    .select('player_id,bought_price,is_xi,is_captain,is_vc,xi_order,players(id,name,ipl_team_code,role)')
+    .eq('league_id',CL_ID).eq('user_id',userId).order('xi_order');
+  if(error||!data||!data.length) return [];
+  const result = data.map(s=>({
+    id:  s.player_id,
+    n:   s.players.name,
+    t:   s.players.ipl_team_code,
+    r:   s.players.role,
+    ini: s.players.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase(),
+    price: parseFloat(s.bought_price),
+    pts:  [0,0,0],
+    xi:   s.is_xi,
+    is_captain: s.is_captain,
+    is_vc:      s.is_vc
+  }));
+  _mgrSquadCache[key] = result;
+  return result;
 }
-function renderManagerDropdown(m,gwIdx,filterGW){
-  const sq=getManagerSquad(m);
-  const cap=sq[0]?.id||null,vc=sq[1]?.id||null;
-  const xi=sq.filter(p=>p.xi!==false).slice(0,11);
-  let rows;
-  if(filterGW){
-    // GW dropdown: only players with >0 pts that GW
-    rows=xi.filter(p=>(p.pts&&p.pts[gwIdx]||0)>0).map(p=>{
-      const base=p.pts?p.pts[gwIdx]||0:0;
-      const multi=p.id===cap?2:p.id===vc?1.5:1;
-      const final=Math.round(base*multi);
-      return{p,base,multi,final};
-    }).sort((a,b)=>b.final-a.final);
-  } else {
-    // Overall dropdown: all players with their GW3 pts
-    rows=xi.map(p=>{
-      const base=p.pts?p.pts[2]||0:0;
-      const multi=p.id===cap?2:p.id===vc?1.5:1;
-      const final=Math.round(base*multi);
-      return{p,base,multi,final};
-    }).sort((a,b)=>b.final-a.final);
-  }
-  if(!rows.length)return`<div style="padding:10px 16px;font-size:11px;color:var(--muted)">No players scored this gameweek</div>`;
-  return`<div style="background:var(--s2);border-top:1px solid var(--border)">
-    <div style="display:grid;grid-template-columns:1fr 44px 52px 52px;padding:5px 16px;font-size:9px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">
-      <div>Player</div><div style="text-align:center">Role</div><div style="text-align:center">Base</div><div style="text-align:center">Pts</div>
-    </div>
-    ${rows.map(({p,base,multi,final})=>`
-      <div style="display:grid;grid-template-columns:1fr 44px 52px 52px;padding:7px 16px;border-bottom:1px solid rgba(31,46,72,.3);align-items:center">
-        <div style="display:flex;align-items:center;gap:6px">
-          <div class="st-av ${RC[p.r]}">${p.ini}</div>
-          <div>
-            <div style="font-size:11px;font-weight:500">${p.n}${p.id===cap?' <span style=\"font-size:8px;background:var(--gold);color:#000;border-radius:3px;padding:1px 3px;font-weight:700\">C</span>':p.id===vc?' <span style=\"font-size:8px;background:var(--purple);color:#fff;border-radius:3px;padding:1px 3px;font-weight:700\">VC</span>':''}</div>
-            <div style="font-size:9px;color:var(--muted)">${p.t}</div>
+
+function renderManagerDropdown(m, gwIdx, filterGW){
+  const containerId = 'mgr-dd-'+m.id+'-'+(filterGW?'gw':'ov');
+  setTimeout(async ()=>{
+    const el=document.getElementById(containerId);
+    if(!el) return;
+    const sq = await fetchManagerSquad(m.id);
+    if(!sq.length){
+      el.innerHTML='<div style="padding:10px 16px;font-size:11px;color:var(--muted)">No players in squad yet</div>';
+      return;
+    }
+    const cap = sq.find(p=>p.is_captain)?.id || sq[0]?.id || null;
+    const vc  = sq.find(p=>p.is_vc)?.id     || sq[1]?.id || null;
+    const xi  = sq.filter(p=>p.xi!==false);
+    let rows;
+    if(filterGW){
+      rows = xi.map(p=>{ const base=p.pts?p.pts[gwIdx]||0:0; const multi=p.id===cap?2:p.id===vc?1.5:1; const final=Math.round(base*multi); return{p,base,multi,final}; });
+    } else {
+      rows = sq.map(p=>({p,base:p.price||0,multi:1,final:p.price||0}));
+    }
+    if(!rows.length){ el.innerHTML='<div style="padding:10px 16px;font-size:11px;color:var(--muted)">No players found</div>'; return; }
+    const colHdr = filterGW?'<div style="text-align:center">Base</div><div style="text-align:center">Pts</div>':'<div style="text-align:center">Paid</div><div style="text-align:center">₹cr</div>';
+    el.innerHTML=`<div style="background:var(--s2);border-top:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:1fr 44px 52px 52px;padding:5px 16px;font-size:9px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">
+        <div>Player</div><div style="text-align:center">Role</div>${colHdr}
+      </div>
+      ${rows.map(({p,base,multi,final})=>`
+        <div style="display:grid;grid-template-columns:1fr 44px 52px 52px;padding:7px 16px;border-bottom:1px solid rgba(31,46,72,.3);align-items:center">
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="st-av ${RC[p.r]}">${p.ini}</div>
+            <div><div style="font-size:11px;font-weight:500">${p.n}${p.id===cap?' <span style="font-size:8px;background:var(--gold);color:#000;border-radius:3px;padding:1px 3px;font-weight:700">C</span>':p.id===vc?' <span style="font-size:8px;background:var(--purple);color:#fff;border-radius:3px;padding:1px 3px;font-weight:700">VC</span>':''}</div>
+            <div style="font-size:9px;color:var(--muted)">${p.t}</div></div>
           </div>
-        </div>
-        <div style="text-align:center"><span class="rp rp-${p.r.toLowerCase()}">${p.r}</span></div>
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--muted);text-align:center">${base}</div>
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:14px;text-align:center;color:${final>40?'var(--green)':final>20?'var(--gold)':'var(--text)'}">${final}${multi>1?`<span style="font-size:8px;color:var(--muted)">×${multi}</span>`:''}</div>
-      </div>`).join('')}
-    <div style="padding:6px 16px;font-size:10px;color:var(--muted);text-align:right;border-top:1px solid var(--border)">Total: <strong style="color:var(--gold)">${rows.reduce((s,r)=>s+r.final,0)} pts</strong></div>
+          <div style="text-align:center"><span class="rp rp-${p.r.toLowerCase()}">${p.r}</span></div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--muted);text-align:center">${base}</div>
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:14px;text-align:center;color:${filterGW?(final>40?'var(--green)':final>20?'var(--gold)':'var(--text)'): 'var(--gold)'}">
+            ${filterGW?final:parseFloat(p.price||0).toFixed(1)}${filterGW&&multi>1?`<span style="font-size:8px;color:var(--muted)">x${multi}</span>`:''}
+          </div>
+        </div>`).join('')}
+      <div style="padding:6px 16px;font-size:10px;color:var(--muted);text-align:right;border-top:1px solid var(--border)">${filterGW?'Total: <strong style="color:var(--gold)">'+rows.reduce((s,r)=>s+r.final,0)+' pts</strong>':'Players: <strong style="color:var(--gold)">'+rows.length+'</strong>'}</div>
+    </div>`;
+  }, 0);
+  return `<div id="${containerId}" style="background:var(--s2);border-top:1px solid var(--border)">
+    <div style="padding:10px 16px;font-size:11px;color:var(--muted);text-align:center">Loading squad...</div>
   </div>`;
 }
+
 function toggleLbRow(mid,type){
   if(type==='overall'){lbExpandedOverall=lbExpandedOverall===mid?null:mid;}
   else{lbExpandedGW=lbExpandedGW===mid?null:mid;}
+  if(CL_ID) delete _mgrSquadCache[CL_ID+'_'+mid];
   renderLeague();
 }
+
 async function renderLeague(){
   // Load standings from Supabase if available, else fall back to LB_MANAGERS
   let standingsData=null;
@@ -3015,12 +3049,12 @@ function renderMgrSpotlight(){
 
   const {data:userPromise} = sb.auth.getUser();
   const isLeading = mgrAucState.currentBidder === (window._mgrUserId||null);
-  // FIX 2: First bid is AT base price; subsequent bids add increment
+  // FIX 1+2: noBidsYet = nobody has bid yet (currentBidder null AND bid == base)
+  // Once anyone bids, all other managers see base+increment as next bid.
   const noBidsYet = !mgrAucState.currentBidder;
   const nextBid = noBidsYet
-    ? mgrAucState.currentBid   // bid AT the base price
+    ? mgrAucState.currentBid   // first bid is AT base price
     : parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
-  // FIX 1+5: Disable if leading, budget insufficient, or squad full
   const canBid  = !isLeading
     && nextBid <= mgrAucState.myBudget
     && mgrAucState.mySquad.length < (aucConfig.squad||16);
@@ -3046,11 +3080,19 @@ function renderMgrSpotlight(){
       </div>
     </div>
     <div style="padding:0 16px 16px">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Current bid</div>
-      <div class="mat-bid-display">₹${mgrAucState.currentBid}<span style="font-size:14px;color:var(--muted);font-family:'DM Sans',sans-serif">cr</span></div>
-      <div style="font-size:12px;margin-top:4px;min-height:18px;${isLeading?'color:var(--green);font-weight:600':'color:var(--muted)'}">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">Current bid</div>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <div class="mat-bid-display">₹${mgrAucState.currentBid}<span style="font-size:14px;color:var(--muted);font-family:'DM Sans',sans-serif">cr</span></div>
+        <!-- FIX 2: Winner name inline with bid, highlighted -->
+        <div style="font-size:16px;font-weight:700;${isLeading?'color:var(--green)':mgrAucState.currentBidderName?'color:var(--gold)':'color:var(--muted)'}">
+          ${mgrAucState.currentBidderName
+            ? (isLeading ? '🏆 You' : '🏆 '+mgrAucState.currentBidderName)
+            : '—'}
+        </div>
+      </div>
+      <div style="font-size:11px;margin-top:2px;${isLeading?'color:var(--green)':'color:var(--muted)'}">
         ${mgrAucState.currentBidderName
-          ? (isLeading ? '🏆 You are leading!' : '🏆 Leading: '+mgrAucState.currentBidderName)
+          ? (isLeading ? 'You are leading!' : 'is leading')
           : 'No bids yet — be the first'}
       </div>
     </div>`;
@@ -3086,7 +3128,7 @@ async function managerPlaceBid(){
   if(!mgrAucState.auctionId||!mgrAucState.currentPlayer) return;
   const {data:{user}} = await sb.auth.getUser();
   window._mgrUserId = user.id;
-  // FIX 2: First bid is AT base price; subsequent bids add increment
+  // FIX 1+2: First bid at base, subsequent bids add increment
   const noBidsYet = !mgrAucState.currentBidder;
   const nextBid = noBidsYet
     ? mgrAucState.currentBid
