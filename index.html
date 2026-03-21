@@ -782,13 +782,19 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
           Tap to place bid
         </div>
       </div>
-      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}
+/* Transparent scrollbars globally */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(90,110,138,.25);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(90,110,138,.45)}
+</style>
 
       <!-- Squad progress -->
       <div class="card">
         <div class="card-hdr"><span class="card-title">My Squad</span><span class="badge b-blue" id="mgr-squad-count">0 players</span></div>
-        <!-- FIX 3: scrollable, shows ALL players -->
-        <div style="max-height:320px;overflow-y:auto" id="mgr-my-squad">
+        <!-- Squad list — no max-height, outer panel scrolls -->
+        <div id="mgr-my-squad">
           <div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>
         </div>
       </div>
@@ -1027,15 +1033,17 @@ async function sbGetMyLeagues(){
   const {data:{user}} = await sb.auth.getUser();
   if(!user) return [];
   const {data,error} = await sb.from('league_members').select(
-    'budget_remaining, leagues(id,name,code,status,current_gw,budget_per_team,max_squad_size,admin_id,transfer_gws)'
+    'budget_remaining, leagues(id,name,code,status,current_gw,budget_per_team,max_squad_size,admin_id,transfer_gws,transfers_open,auction_timer_secs)'
   ).eq('user_id',user.id);
   if(error){console.error('sbGetMyLeagues',error);return [];}
   return data.map(r=>({
     id:r.leagues.id, name:r.leagues.name, code:r.leagues.code,
     adminId:r.leagues.admin_id, budget:r.budget_remaining,
     budget_per_team:r.leagues.budget_per_team,
-    squad:r.leagues.max_squad_size, transferGWs:r.leagues.transfer_gws||[5,9],
+    squad:r.leagues.max_squad_size, transferGWs:r.leagues.transfer_gws||[],
     gw:r.leagues.current_gw||1, status:r.leagues.status,
+    transfers_open: r.leagues.transfers_open===true,
+    auction_timer_secs: r.leagues.auction_timer_secs||30,
     members:[], nextMatch:'TBD', lockTimer:'--'
   }));
 }
@@ -2692,7 +2700,7 @@ async function renderTransfers(){
               <span style="color:var(--red)">(-₹${loss}cr)</span>
             </div>
           </div>
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--gold);flex-shrink:0;margin-right:6px">₹${rv}cr</span>
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--gold);flex-shrink:0;margin-right:6px">₹${p.price}cr</span>
           ${outBtn}
         </div>`;
       }).join('')
@@ -3196,9 +3204,13 @@ function renderMgrSpotlight(){
     ? parseFloat(mgrAucState.currentBid.toFixed(2))
     : parseFloat((mgrAucState.currentBid + getInc(mgrAucState.currentBid)).toFixed(2));
 
+  // FIX 1: Use aucConfig.squad (from state_json) OR league's max_squad_size
+  const squadLimit = aucConfig.squad
+    || LEAGUES_DB.find(x=>x.id===mgrAucState.leagueId)?.squad
+    || 16;
   const canBid = !isLeading
     && nextBid <= mgrAucState.myBudget
-    && mgrAucState.mySquad.length < (aucConfig.squad||16);
+    && mgrAucState.mySquad.length < squadLimit;
   const rcClass = RC[p.r]||'av-0';
 
   const el=document.getElementById('mgr-spotlight');
@@ -3260,7 +3272,7 @@ function renderMgrSpotlight(){
     if(hint){
       if(isLeading) hint.textContent='You are leading — wait for another bid';
       else if(nextBid>mgrAucState.myBudget) hint.textContent='Insufficient budget';
-      else hint.textContent='Squad full';
+      else hint.textContent='Squad full ('+squadLimit+' players max)';
     }
   }
 
@@ -3283,7 +3295,8 @@ async function managerPlaceBid(){
     showToast('You are already leading this bid','info'); return;
   }
   if(nextBid > mgrAucState.myBudget){ showToast('Not enough budget','error'); return; }
-  if(mgrAucState.mySquad.length >= (aucConfig.squad||16)){ showToast('Squad full!','error'); return; }
+  const squadLimitBid = aucConfig.squad || LEAGUES_DB.find(x=>x.id===mgrAucState.leagueId)?.squad || 16;
+  if(mgrAucState.mySquad.length >= squadLimitBid){ showToast('Squad full! ('+squadLimitBid+' players max)','error'); return; }
 
   // FIX 2: Show spinner, keep button visible but loading
   const bb      = document.getElementById('mgr-bid-btn');
