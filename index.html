@@ -1973,13 +1973,12 @@ function subscribeAdminToAuction(){
       const sb2=document.getElementById('sell-now-btn');if(sb2)sb2.disabled=false;
       saveAuctionState('live');
     })
-    // FIX 5: Listen for state updates (paused/resumed/log changes) → sync manager screens
+    // Listen for state updates (paused/resumed)
     .on('postgres_changes',{
       event:'UPDATE', schema:'public', table:'auctions',
       filter:'id=eq.'+aucConfig.auctionId
     }, async (payload)=>{
       const updated = payload.new;
-      // Update pause button state if changed remotely
       if(updated.status==='paused' && !aucPaused){
         aucPaused=true;
         const btn=document.getElementById('pause-btn');
@@ -1989,6 +1988,62 @@ function subscribeAdminToAuction(){
         const btn=document.getElementById('pause-btn');
         if(btn) btn.textContent='⏸ Pause';
       }
+    })
+    // ── Listen for new auction_queue entries (player transferred back in) ──
+    .on('postgres_changes',{
+      event:'INSERT', schema:'public', table:'auction_queue',
+      filter:'auction_id=eq.'+aucConfig.auctionId
+    }, async (payload)=>{
+      const row = payload.new;
+      // Only process 'pending' inserts (not the initial launch inserts)
+      if(row.status !== 'pending') return;
+      // Check if this player is already in aucQueue
+      const alreadyIn = aucQueue.find(p=>p.id===row.player_id);
+      if(alreadyIn) return;
+      // Fetch player details
+      const {data:pRow} = await sb.from('players')
+        .select('id,name,ipl_team_code,role,base_price')
+        .eq('id',row.player_id).single();
+      if(!pRow) return;
+      // Build queue item (same shape as existing aucQueue entries)
+      const words = pRow.name.split(' ');
+      const ini   = words.map(w=>w[0]).join('').substring(0,3).toUpperCase();
+      const qItem = {
+        id:    pRow.id,
+        n:     pRow.name,
+        t:     pRow.ipl_team_code,
+        r:     pRow.role,
+        ini,
+        base:  parseFloat(pRow.base_price),
+        stats: {},
+        soldTo: null, unsold: false, soldPrice: 0,
+        transferredBack: true   // flag so admin can see it's a return
+      };
+      aucQueue.push(qItem);
+      addLog('sys', '🔄 '+pRow.name+' returned to queue (transferred out by manager)');
+      renderQueueList();
+    })
+    // ── Listen for squads DELETEs (player transferred out) ──
+    .on('postgres_changes',{
+      event:'DELETE', schema:'public', table:'squads'
+    }, async (payload)=>{
+      const row = payload.old;
+      if(!row || row.league_id !== aucConfig.leagueId) return;
+      // Remove player from the relevant manager's aucMgrs squad
+      const mgr = aucMgrs.find(m=>m.id===row.user_id);
+      if(mgr){
+        mgr.squad = mgr.squad.filter(p=>p.id!==row.player_id);
+        // Also update their budget from league_members
+        const {data:memRow} = await sb.from('league_members')
+          .select('budget_remaining').eq('league_id',aucConfig.leagueId)
+          .eq('user_id',row.user_id).single();
+        if(memRow) mgr.budget = parseFloat(memRow.budget_remaining||mgr.budget);
+      }
+      // Re-render scoreboard if visible
+      if(document.getElementById('auc-scoreboard')?.style.display!=='none'){
+        renderSB(sbCurrentTab);
+      }
+      addLog('sys', 'Manager transferred out a player');
     })
     .subscribe();
 }
@@ -2778,8 +2833,15 @@ async function doTransferOut(playerId, playerName, boughtPrice){
         });
       }
 
-      // 5. FIX 4: Refresh My Squad in Auction tab if visible
+      // 5. Refresh My Squad in Auction tab if visible
       if(typeof refreshMgrSquad==='function') await refreshMgrSquad();
+
+      // 6. Also update mgrAucState.mySquad so bid canBid recalculates correctly
+      mgrAucState.mySquad = mgrAucState.mySquad.filter(p=>p.name!==playerName);
+
+      // 7. Update mgr-squad-count badge
+      const cntEl=document.getElementById('mgr-squad-count');
+      if(cntEl) cntEl.textContent=squad.length+' players';
 
       showToast(playerName+' transferred out · ₹'+rv+'cr returned','success');
       renderTransfers();
