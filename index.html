@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1995,39 +1994,6 @@ function qdragStart(e,i){aucDragSrc=i;e.dataTransfer.effectAllowed='move';setTim
 function qdragOver(e){e.preventDefault();document.querySelectorAll('.qi').forEach(r=>r.classList.remove('drag-over'));e.currentTarget.classList.add('drag-over');}
 function qdrop(e,t){e.preventDefault();if(aucDragSrc===null||aucDragSrc===t)return;const s=aucQueue.splice(aucDragSrc,1)[0];aucQueue.splice(t,0,s);if(aucIdx===aucDragSrc)aucIdx=t;aucDragSrc=null;renderQueueList();showToast('Queue reordered','info');}
 function qdragEnd(){document.querySelectorAll('.qi').forEach(r=>{r.classList.remove('dragging');r.classList.remove('drag-over');});aucDragSrc=null;}
-
-/* ─────────── IPL team gradients ─────────── */
-const IPL_TEAM_COLORS = {
-  MI:  {g:'linear-gradient(135deg,#004BA0 0%,#001F5C 100%)', accent:'#5BB8F5'},
-  CSK: {g:'linear-gradient(135deg,#F9CD05 0%,#E5940A 100%)', accent:'#fff'},
-  RCB: {g:'linear-gradient(135deg,#C8102E 0%,#1A1A1A 100%)', accent:'#FFD700'},
-  KKR: {g:'linear-gradient(135deg,#3A225D 0%,#C5A028 100%)', accent:'#FFD700'},
-  DC:  {g:'linear-gradient(135deg,#0078BC 0%,#EF1C25 100%)', accent:'#fff'},
-  PBKS:{g:'linear-gradient(135deg,#ED1B24 0%,#A7182A 100%)', accent:'#FFD700'},
-  RR:  {g:'linear-gradient(135deg,#E8005D 0%,#254AA5 100%)', accent:'#fff'},
-  SRH: {g:'linear-gradient(135deg,#F26522 0%,#C23B0E 100%)', accent:'#fff'},
-  GT:  {g:'linear-gradient(135deg,#1C1C1C 0%,#1C4E9A 100%)', accent:'#DFA860'},
-  LSG: {g:'linear-gradient(135deg,#A72B6D 0%,#004C97 100%)', accent:'#fff'},
-  DEFAULT:{g:'linear-gradient(135deg,#1a2740 0%,#0d1421 100%)', accent:'var(--gold)'}
-};
-const ROLE_ICON = {BAT:'🏏', BWL:'🎳', AR:'⭐', WK:'🧤'};
-const ROLE_FULL = {BAT:'Batsman', BWL:'Bowler', AR:'All-rounder', WK:'Keeper'};
-
-function getTeamColors(teamCode){
-  const key = (teamCode||'').toUpperCase().replace(/[^A-Z]/g,'');
-  return IPL_TEAM_COLORS[key] || IPL_TEAM_COLORS.DEFAULT;
-}
-
-function playerImgUrl(playerName){
-  // ESPN Cricinfo serves headshots at a predictable URL.
-  // We generate a slug and try to load it; the onError falls back to the avatar.
-  const slug = playerName.toLowerCase()
-    .replace(/[^a-z ]/g,'')
-    .trim()
-    .replace(/ +/g,'-');
-  return 'https://img1.hscicdn.com/image/upload/f_auto,t_ds_square_w_320/lsci/db/PICTURES/CMS/316700/'+slug+'.png';
-}
-
 // AUCTION ENGINE
 async function nextPlayer(){
   if(aucInterval)clearInterval(aucInterval);
@@ -2202,40 +2168,21 @@ function buildStats(p){
 function renderAucCenter(p){
   const c=document.getElementById('auc-center');
   if(!p){c.innerHTML='<div style="text-align:center;padding:30px;color:var(--muted)">No more players in queue</div>';return;}
-  const tc  = getTeamColors(p.t);
-  const img = playerImgUrl(p.n);
   c.innerHTML=`
-    <div style="display:flex;gap:10px;align-items:center;width:100%;max-width:460px;margin-bottom:8px">
+    <div style="display:flex;gap:10px;align-items:center;width:100%;max-width:420px">
       <div class="timer-ring"><svg width="64" height="64" viewBox="0 0 64 64"><circle class="bg-ring" cx="32" cy="32" r="28"/><circle class="fg-ring" id="auc-timer-fg" cx="32" cy="32" r="28"/></svg><div class="timer-num" id="auc-timer-num">${aucTimer}</div></div>
-      <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">On auction · ${p.t} · ${RN[p.r]}</div>
-      <div style="font-size:10px;color:var(--muted)">Next increment: <strong style="color:var(--gold)">${fmtInc(getInc(aucBid))}</strong></div></div>
+      <div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px">On auction · ${p.t} · ${RN[p.r]}</div><div style="font-size:10px;color:var(--muted)">Next increment: <strong style="color:var(--gold)">${fmtInc(getInc(aucBid))}</strong></div></div>
     </div>
-    <div class="spotlight" style="max-width:460px">
+    <div class="spotlight">
       <div class="sold-ov" id="sold-ov"><div class="sold-stamp" id="sold-stamp">SOLD</div><div class="sold-sub-txt" id="sold-sub"></div></div>
-      <!-- Hero card with team gradient + player photo -->
-      <div style="background:${tc.g};padding:16px 16px 0;display:flex;gap:14px;align-items:flex-end;min-height:110px;position:relative;overflow:hidden">
-        <!-- Faint team code watermark -->
-        <div style="position:absolute;right:-8px;bottom:-10px;font-family:'Bebas Neue',sans-serif;font-size:72px;color:rgba(255,255,255,.08);line-height:1;pointer-events:none">${p.t}</div>
-        <!-- Player photo with fallback to role avatar -->
-        <div style="width:88px;height:88px;flex-shrink:0;border-radius:12px 12px 0 0;overflow:hidden;background:rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center">
-          <img src="${img}" alt="${p.n}"
-            style="width:100%;height:100%;object-fit:cover;object-position:top"
-            onerror="this.style.display='none';this.nextSibling.style.display='flex'"/>
-          <div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;font-size:36px">${ROLE_ICON[p.r]||'🏏'}</div>
-        </div>
-        <div style="padding-bottom:12px;flex:1;min-width:0">
-          <div style="font-size:9px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.6);margin-bottom:2px">${p.t} · ${ROLE_FULL[p.r]||p.r}</div>
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:28px;letter-spacing:1px;line-height:1;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.n}</div>
-          <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:4px">Base ₹${p.base}cr</div>
-        </div>
+      <div class="sp-top">
+        <div class="big-av ${RC[p.r]}">${p.ini}</div>
+        <div><div class="sp-name">${p.n}</div><div class="sp-sub">${p.t} · ${RN[p.r]} · Base ₹${p.base}cr</div><div class="sp-stats">${buildStats(p)}</div></div>
       </div>
-      <div class="sp-bid-area" style="background:var(--s1)">
+      <div class="sp-bid-area">
         <div class="bid-lbl">Current bid</div>
         <div class="cur-bid" id="auc-cur-bid">₹${aucBid}<span>cr</span></div>
-        <!-- FIX 1: Single-line highlighted bid status pill -->
-        <div id="auc-top-txt" style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;color:var(--muted);margin:4px 0">
-          No bids yet — starts ₹${p.base}cr
-        </div>
+        <div class="top-bidder-txt" id="auc-top-txt">No bids yet — starts ₹${p.base}cr</div>
         <div class="ctrl-row">
           <button class="btn-sm" id="pause-btn" onclick="togglePause()">⏸ Pause</button>
           <button class="btn-sm red" onclick="markUnsold()">Mark Unsold</button>
@@ -2243,21 +2190,13 @@ function renderAucCenter(p){
           <button class="btn-sm" onclick="addAucTime(10)">+10s</button>
         </div>
       </div>
-    </div>`;
+    </div>
+    `;
 }
 function renderAucBidDisplay(){
   const m=aucMgrs.find(x=>x.id===aucTop);
   const cb=document.getElementById('auc-cur-bid');if(cb)cb.innerHTML='₹'+aucBid+'<span>cr</span>';
-  const tt=document.getElementById('auc-top-txt');
-  if(tt){
-    if(m){
-      tt.innerHTML='<span style="font-size:14px">🏆</span><span style="color:var(--green)">'+m.name+'</span><span style="color:var(--muted);font-weight:400">is leading</span>';
-      tt.style.background='rgba(0,212,170,.12)';tt.style.borderColor='rgba(0,212,170,.35)';tt.style.color='var(--green)';
-    }else{
-      tt.textContent='No bids yet';
-      tt.style.background='rgba(90,110,138,.1)';tt.style.borderColor='rgba(90,110,138,.2)';tt.style.color='var(--muted)';
-    }
-  }
+  const tt=document.getElementById('auc-top-txt');if(tt){if(m){tt.textContent='🏆 '+m.name+' leading';tt.style.color='var(--green)';}else{tt.textContent='No bids yet';tt.style.color='var(--muted)';}}
 }
 function renderBiddersBar(){
   const bar=document.getElementById('bidders-bar');if(!bar)return;
@@ -3126,50 +3065,40 @@ function renderMgrSpotlight(){
 
   const el=document.getElementById('mgr-spotlight');
   if(!el) return;
-  const tc  = getTeamColors(p.t);
-  const img = playerImgUrl(p.n);
-  const timerOffset = 176*(1-mgrTimerValue/(mgrTimerMax||30));
-  const timerStroke = mgrTimerValue>10?'var(--green)':mgrTimerValue>5?'var(--gold)':'var(--red)';
-  let pillHTML, pillBg, pillBorder;
-  if(isLeading){
-    pillHTML = '<span style="font-size:13px">🏆</span><span style="color:var(--green);font-weight:700">You are leading!</span>';
-    pillBg='rgba(0,212,170,.12)'; pillBorder='rgba(0,212,170,.35)';
-  } else if(mgrAucState.currentBidderName){
-    pillHTML = '<span style="font-size:13px">🏆</span><span style="color:var(--gold);font-weight:700">'+mgrAucState.currentBidderName+'</span><span style="color:var(--muted);font-size:11px"> is leading</span>';
-    pillBg='rgba(245,166,35,.1)'; pillBorder='rgba(245,166,35,.3)';
-  } else {
-    pillHTML = '<span style="color:var(--muted)">No bids yet — be the first!</span>';
-    pillBg='rgba(90,110,138,.08)'; pillBorder='rgba(90,110,138,.2)';
-  }
   el.innerHTML=`
-    <div style="background:${tc.g};padding:14px 14px 0;display:flex;gap:12px;align-items:flex-end;min-height:100px;position:relative;overflow:hidden">
-      <div style="position:absolute;right:-6px;bottom:-8px;font-family:'Bebas Neue',sans-serif;font-size:64px;color:rgba(255,255,255,.07);line-height:1;pointer-events:none">${p.t}</div>
-      <div style="width:76px;height:76px;flex-shrink:0;border-radius:10px 10px 0 0;overflow:hidden;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center">
-        <img src="${img}" alt="${p.n}" style="width:100%;height:100%;object-fit:cover;object-position:top" onerror="this.style.display='none';this.nextSibling.style.display='flex'"/>
-        <div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;font-size:32px">${ROLE_ICON[p.r]||'🏏'}</div>
+    <div style="padding:14px 16px;display:flex;gap:12px;align-items:center">
+      <div class="big-av ${rcClass}" style="width:52px;height:52px;font-size:17px;flex-shrink:0">${p.ini}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">${p.t} · ${RN[p.r]||p.r}</div>
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:1px;line-height:1">${p.n}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">Base ₹${p.base}cr</div>
       </div>
-      <div style="padding-bottom:10px;flex:1;min-width:0">
-        <div style="font-size:9px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,.55);margin-bottom:1px">${p.t} · ${ROLE_FULL[p.r]||p.r}</div>
-        <div style="font-family:'Bebas Neue',sans-serif;font-size:24px;letter-spacing:1px;line-height:1;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.n}</div>
-        <div style="font-size:10px;color:rgba(255,255,255,.5);margin-top:3px">Base ₹${p.base}cr</div>
-      </div>
-      <div class="timer-ring" style="flex-shrink:0;margin-bottom:8px">
-        <svg width="52" height="52" viewBox="0 0 64 64">
+      <div class="timer-ring" style="flex-shrink:0">
+        <svg width="56" height="56" viewBox="0 0 64 64">
           <circle class="bg-ring" cx="32" cy="32" r="28"/>
-          <circle class="fg-ring" id="mgr-timer-fg" cx="32" cy="32" r="28" style="stroke-dashoffset:${timerOffset};stroke:${timerStroke}"/>
+          <circle class="fg-ring" id="mgr-timer-fg" cx="32" cy="32" r="28"
+            style="stroke-dashoffset:${176*(1-aucTimer/(aucConfig.timer||30))};stroke:${aucTimer>10?'var(--green)':aucTimer>5?'var(--gold)':'var(--red)'}"/>
         </svg>
-        <div class="timer-num" id="mgr-timer-num" style="font-size:15px">${mgrTimerValue}</div>
+        <div class="timer-num" id="mgr-timer-num" style="font-size:17px">${aucTimer}</div>
       </div>
     </div>
-    <div style="padding:12px 14px">
-      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Current bid</div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:nowrap">
-        <div class="mat-bid-display" style="font-size:42px">₹${mgrAucState.currentBid}<span style="font-size:14px;color:var(--muted);font-family:'DM Sans',sans-serif">cr</span></div>
-        <div style="display:inline-flex;align-items:center;gap:5px;background:${pillBg};border:1px solid ${pillBorder};border-radius:20px;padding:5px 12px;font-size:12px;white-space:nowrap;flex-shrink:0">
-          ${pillHTML}
+    <div style="padding:0 16px 16px">
+      <div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">Current bid</div>
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
+        <div class="mat-bid-display">₹${mgrAucState.currentBid}<span style="font-size:14px;color:var(--muted);font-family:'DM Sans',sans-serif">cr</span></div>
+        <!-- FIX 2: Winner name inline with bid, highlighted -->
+        <div style="font-size:16px;font-weight:700;${isLeading?'color:var(--green)':mgrAucState.currentBidderName?'color:var(--gold)':'color:var(--muted)'}">
+          ${mgrAucState.currentBidderName
+            ? (isLeading ? '🏆 You' : '🏆 '+mgrAucState.currentBidderName)
+            : '—'}
         </div>
       </div>
-    </div>\`;
+      <div style="font-size:11px;margin-top:2px;${isLeading?'color:var(--green)':'color:var(--muted)'}">
+        ${mgrAucState.currentBidderName
+          ? (isLeading ? 'You are leading!' : 'is leading')
+          : 'No bids yet — be the first'}
+      </div>
+    </div>`;
 
   // Update bid button
   const bw=document.getElementById('mgr-bid-wrap');
@@ -3305,7 +3234,7 @@ async function renderMgrScoreboard(){
       <div class="sb-card-hdr">
         <div class="sb-av ${av}">${ini}</div>
         <div>
-          <div style="font-size:13px;font-weight:600">${name}${isMe?' <span style="font-size:8px;background:var(--accent);color:#000;border-radius:3px;padding:1px 4px">You</span>':''}</div>
+          <div style="font-size:13px;font-weight:600">${name}${isMe?' <span class="badge b-blue" style="font-size:8px">You</span>':''}</div>
           <div style="font-size:10px;color:var(--muted)">${players.length} players · ₹${bud}cr left</div>
         </div>
       </div>
