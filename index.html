@@ -1682,15 +1682,25 @@ function applyTransferToggleUI(isOn){
 }
 
 async function toggleTransfersFromAuction(){
-  // Get lgId from aucConfig
   const lgId = aucConfig.leagueId||controlRoomLeagueId;
   if(!lgId) return;
   const lg=LEAGUES_DB.find(x=>x.id===lgId);
-  const newVal = !(lg?.transfers_open===true);
-  if(lg) lg.transfers_open=newVal;
+  // FIX 1c: Explicitly cast to boolean true/false — never undefined
+  const newVal = lg?.transfers_open===true ? false : true;
+  if(lg) lg.transfers_open = newVal;
   applyTransferToggleUI(newVal);
-  await sb.from('leagues').update({transfers_open:newVal}).eq('id',lgId);
-  showToast('Transfers '+(newVal?'enabled':'disabled')+' for all managers','success');
+  // Write explicit boolean to DB — Realtime will broadcast to all manager screens
+  const {error} = await sb.from('leagues')
+    .update({ transfers_open: newVal })
+    .eq('id', lgId);
+  if(error){
+    showToast('Failed to update transfers: '+error.message,'error');
+    // Revert local state
+    if(lg) lg.transfers_open = !newVal;
+    applyTransferToggleUI(!newVal);
+    return;
+  }
+  showToast('Transfers '+(newVal?'enabled — managers can now transfer':'disabled for managers'),'success');
 }
 
 // Seed the auction nav toggle when entering live auction screen
@@ -2463,7 +2473,12 @@ async function endAuction(){
     auctionEnded: true   // signal to manager screens
   };
   await sb.from('auctions').update({status:'ended', state_json:endedState}).eq('id',aucConfig.auctionId||'');
-  await sb.from('leagues').update({ status:'active' }).eq('id', lgId);
+  // FIX 1a: Only update status — do NOT touch transfers_open so it stays as admin set it
+  const lgForEnd = LEAGUES_DB.find(x=>x.id===lgId);
+  await sb.from('leagues').update({
+    status:'active'
+    // transfers_open intentionally NOT included — preserve admin's setting
+  }).eq('id', lgId);
   // Show Resume button, hide End button on admin screen
   const resumeBtn=document.getElementById('resume-auction-btn');
   const endBtn=document.getElementById('end-auction-btn');
@@ -2636,7 +2651,12 @@ function renderPts(){
 // TRANSFERS
 async function renderTransfers(){
   const lg=LEAGUES_DB.find(x=>x.id===CL_ID);
-  // FIX 2: Use transfers_open flag, not GW-based check
+  // FIX 1d: Always re-fetch transfers_open from DB to avoid stale cache
+  try{
+    const {data:lgFresh2} = await sb.from('leagues')
+      .select('transfers_open').eq('id',CL_ID).single();
+    if(lgFresh2 && lg) lg.transfers_open = lgFresh2.transfers_open===true;
+  }catch(e){}
   const isOpen = lg?.transfers_open===true;
   const cont=document.getElementById('xfer-content');
   if(!cont) return;
@@ -3665,25 +3685,38 @@ function subscribeToMgrAuction(){
         ).join('');
       }
     })
-    // FIX 1: Listen for league updates (transfers_open toggle)
+    // Listen for league updates (transfers_open toggle, status changes)
     .on('postgres_changes',{
       event:'UPDATE', schema:'public', table:'leagues',
       filter:'id=eq.'+mgrAucState.leagueId
     }, (payload)=>{
       const updated = payload.new;
-      // Update local cache
       const lg = LEAGUES_DB.find(x=>x.id===mgrAucState.leagueId);
-      if(lg) lg.transfers_open = updated.transfers_open;
-      // Update the Transfers tab state immediately
-      const xt=document.getElementById('dt-transfers');
-      if(xt) xt.className='nav-tab'+(updated.transfers_open===true?'':' off');
-      const msg=updated.transfers_open===true?'Transfer window opened by admin':'Transfer window closed by admin';
-      showToast(msg, updated.transfers_open===true?'success':'info');
-      mgrAddLog('sys', updated.transfers_open===true?'🔄 Transfer window opened':'🔒 Transfer window closed');
-      // If transfers tab is currently open, re-render it
-      if(document.getElementById('tab-transfers')?.classList.contains('active')){
-        renderTransfers();
+
+      // FIX 1b: Only process transfers_open changes if the column is explicitly
+      // set in the update (not null). Ignore league status-only updates.
+      const newTransfersOpen = updated.transfers_open;
+      const prevTransfersOpen = lg?.transfers_open;
+
+      if(newTransfersOpen !== null && newTransfersOpen !== undefined){
+        // Update local cache
+        if(lg) lg.transfers_open = newTransfersOpen===true;
+
+        // Only show toast/log if the value actually changed
+        if(newTransfersOpen !== prevTransfersOpen){
+          const xt=document.getElementById('dt-transfers');
+          if(xt) xt.className='nav-tab'; // always keep tab clickable
+          const msg=newTransfersOpen===true?'Transfer window opened by admin':'Transfer window closed by admin';
+          showToast(msg, newTransfersOpen===true?'success':'info');
+          mgrAddLog('sys', newTransfersOpen===true?'🔄 Transfer window opened':'🔒 Transfer window closed');
+        }
+        // Re-render transfers tab if open
+        if(document.getElementById('tab-transfers')?.classList.contains('active')){
+          renderTransfers();
+        }
       }
+      // Update status in local cache (regardless)
+      if(lg && updated.status) lg.status = updated.status;
     })
     .subscribe();
 }
