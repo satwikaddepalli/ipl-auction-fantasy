@@ -566,6 +566,17 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
       <span class="badge b-green" id="a-sold-badge">0 Sold</span>
       <span class="badge b-red" id="a-unsold-badge">0 Unsold</span>
       <button class="btn-sm" onclick="showAucScreen('scoreboard')" style="font-size:11px;padding:4px 9px">Live Squad</button>
+      <div style="display:flex;align-items:center;gap:5px;padding:0 2px">
+        <span style="font-size:10px;color:var(--muted)">Transfers</span>
+        <div id="auc-transfer-tgl" onclick="toggleTransfersFromAuction()"
+          style="width:34px;height:18px;border-radius:9px;background:var(--s2);border:1px solid var(--border);
+                 cursor:pointer;position:relative;transition:.2s">
+          <div id="auc-transfer-dot"
+            style="width:12px;height:12px;border-radius:50%;background:var(--muted);
+                   position:absolute;top:2px;left:2px;transition:.2s"></div>
+        </div>
+        <span id="auc-transfer-lbl" style="font-size:10px;color:var(--muted)">Off</span>
+      </div>
       <button class="btn-sm" onclick="confirmRestartAuction()" style="font-size:11px;padding:4px 9px;border-color:var(--gold);color:var(--gold)">↺ Restart</button>
       <button class="btn-sm green" id="resume-auction-btn" onclick="resumeAuction()" style="font-size:11px;padding:4px 9px;display:none">▶ Resume Auction</button>
       <button class="btn-sm red" id="end-auction-btn" onclick="confirmEndAuction()" style="font-size:11px;padding:4px 9px">End Auction</button>
@@ -1619,80 +1630,57 @@ async function renderControlRoom(lg){
           <option value="60" ${timer==60?'selected':''}>60 seconds</option>
         </select>
       </div>
-      <div>
-        <label class="inp-label">Transfer windows</label>
-        <select class="inp" id="cr-transfer" style="margin:0">
-          <option value="5,9"  ${tGWs==='5, 9'||tGWs==='5,9'?'selected':''}>GW 5 &amp; 9</option>
-          <option value="6,10" ${tGWs==='6, 10'||tGWs==='6,10'?'selected':''}>GW 6 &amp; 10</option>
-          <option value="5"    ${tGWs==='5'?'selected':''}>GW 5 only</option>
-          <option value="7"    ${tGWs==='7'?'selected':''}>GW 7 only</option>
-        </select>
-      </div>
     </div>
-    <div style="padding:0 14px 12px;display:flex;align-items:center;justify-content:space-between">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:12px;font-weight:500">Transfers</span>
-        <div style="display:flex;align-items:center;gap:6px">
-          <div id="cr-transfer-tgl" onclick="toggleTransfers('${lg.id}')"
-            style="width:40px;height:22px;border-radius:11px;background:var(--s2);border:1px solid var(--border);
-                   cursor:pointer;position:relative;transition:.2s" title="Toggle transfer window">
-            <div id="cr-transfer-dot"
-              style="width:16px;height:16px;border-radius:50%;background:var(--muted);
-                     position:absolute;top:2px;left:2px;transition:.2s"></div>
-          </div>
-          <span id="cr-transfer-lbl" style="font-size:11px;color:var(--muted)">Off</span>
-        </div>
-      </div>
+    <div style="padding:0 14px 12px;display:flex;justify-content:flex-end">
       <button class="btn-sm gold" onclick="saveControlRoomConfig('${lg.id}')">Save Config</button>
     </div>`;
-  // Seed toggle state
-  setTimeout(()=>seedTransferToggle('${lg.id}'),100);
   // Load real members
   await refreshControlRoomMembers(lg.id);
 }
 
 
-async function seedTransferToggle(lgId){
-  // Read transfers_open from leagues table (or default off)
-  const lg=LEAGUES_DB.find(x=>x.id===lgId);
-  const isOn = lg?.transfers_open===true;
-  applyTransferToggleUI(isOn);
-}
+
 
 function applyTransferToggleUI(isOn){
-  const tgl=document.getElementById('cr-transfer-tgl');
-  const dot=document.getElementById('cr-transfer-dot');
-  const lbl=document.getElementById('cr-transfer-lbl');
+  // Update auction nav toggle (in live screen)
+  const tgl=document.getElementById('auc-transfer-tgl');
+  const dot=document.getElementById('auc-transfer-dot');
+  const lbl=document.getElementById('auc-transfer-lbl');
   if(tgl) tgl.style.background=isOn?'var(--green)':'var(--s2)';
-  if(dot){ dot.style.left=isOn?'22px':'2px'; dot.style.background=isOn?'#fff':'var(--muted)'; }
+  if(dot){ dot.style.left=isOn?'18px':'2px'; dot.style.background=isOn?'#fff':'var(--muted)'; }
   if(lbl){ lbl.textContent=isOn?'On':'Off'; lbl.style.color=isOn?'var(--green)':'var(--muted)'; }
 }
 
-async function toggleTransfers(lgId){
+async function toggleTransfersFromAuction(){
+  // Get lgId from aucConfig
+  const lgId = aucConfig.leagueId||controlRoomLeagueId;
+  if(!lgId) return;
   const lg=LEAGUES_DB.find(x=>x.id===lgId);
-  if(!lg) return;
-  const newVal = !(lg.transfers_open===true);
-  lg.transfers_open = newVal;
+  const newVal = !(lg?.transfers_open===true);
+  if(lg) lg.transfers_open=newVal;
   applyTransferToggleUI(newVal);
-  // Persist to Supabase (requires transfers_open column on leagues table)
   await sb.from('leagues').update({transfers_open:newVal}).eq('id',lgId);
   showToast('Transfers '+(newVal?'enabled':'disabled')+' for all managers','success');
+}
+
+// Seed the auction nav toggle when entering live auction screen
+function seedAucTransferToggle(){
+  const lgId=aucConfig.leagueId||controlRoomLeagueId;
+  const lg=LEAGUES_DB.find(x=>x.id===lgId);
+  applyTransferToggleUI(lg?.transfers_open===true);
 }
 
 async function saveControlRoomConfig(lgId){
   const budget   = parseInt(document.getElementById('cr-budget')?.value||100);
   const squad    = parseInt(document.getElementById('cr-squad')?.value||16);
   const timer    = parseInt(document.getElementById('cr-timer')?.value||30);
-  const tGWsRaw  = document.getElementById('cr-transfer')?.value||'5,9';
-  const tGWs     = tGWsRaw.split(',').map(Number);
   const {error}  = await sb.from('leagues').update({
     budget_per_team:budget, max_squad_size:squad,
-    auction_timer_secs:timer, transfer_gws:tGWs
+    auction_timer_secs:timer
   }).eq('id',lgId);
   if(error){showToast('Save failed: '+error.message,'error');return;}
-  // Update local cache
   const lg=LEAGUES_DB.find(x=>x.id===lgId);
-  if(lg){lg.budget_per_team=budget;lg.budget=budget;lg.max_squad_size=squad;lg.squad=squad;lg.auction_timer_secs=timer;lg.transferGWs=tGWs;}
+  if(lg){lg.budget_per_team=budget;lg.budget=budget;lg.max_squad_size=squad;lg.squad=squad;lg.auction_timer_secs=timer;}
   showToast('Config saved','success');
 }
 
@@ -1959,6 +1947,8 @@ function subscribeAdminToAuction(){
    AUCTION LIVE
 ══════════════════════════════════════════ */
 function showAucScreen(id){
+  // Seed transfer toggle state when entering live/waiting screens
+  if(id==='live'||id==='waiting') setTimeout(seedAucTransferToggle,50);
   ['auc-waiting','auc-live','auc-scoreboard','auc-summary'].forEach(s=>{
     const el=document.getElementById(s);
     if(el)el.style.display=s===('auc-'+id)?'flex':'none';
@@ -2778,8 +2768,9 @@ async function initMgrAuctionTab(){
   if(!lgId) return;
   mgrAucState.leagueId = lgId;
 
-  // Get my budget from league_members
+  // FIX 4: Set _mgrUserId immediately so isLeading check works from the start
   const {data:{user}} = await sb.auth.getUser();
+  window._mgrUserId = user.id;
   const {data:memRow} = await sb.from('league_members')
     .select('budget_remaining').eq('league_id',lgId).eq('user_id',user.id).single();
   mgrAucState.myBudget = parseFloat(memRow?.budget_remaining||0);
@@ -3351,120 +3342,90 @@ function subscribeToMgrAuction(){
         }
       }
     })
-    // FIX 5: Listen for auction state changes (paused, log updates, next player)
+    // Listen for all auction state changes
     .on('postgres_changes',{
       event:'UPDATE', schema:'public', table:'auctions',
       filter:'id=eq.'+mgrAucState.auctionId
     }, async (payload)=>{
       const updated = payload.new;
       const state   = updated.state_json||{};
-      // Sync pause status
-      const statusEl=document.getElementById('mgr-auc-status');
+      const statusEl= document.getElementById('mgr-auc-status');
+
+      // ── FIX 1: ENDED — handle FIRST, highest priority ──────────────
+      if(updated.status==='ended' || updated.status==='completed'){
+        stopMgrTimer();
+        mgrAucState.currentPlayer = null;
+        renderMgrWaiting('Auction has ended. View your squad in the Squad tab.');
+        const bw=document.getElementById('mgr-bid-wrap');
+        if(bw) bw.style.display='none';
+        if(statusEl) statusEl.textContent='🏁 Auction ended';
+        // Sync final log
+        if(state.logs&&state.logs.length){
+          const logEl=document.getElementById('mat-log');
+          if(logEl) logEl.innerHTML=state.logs.slice(0,50).map(l=>
+            `<div class="mat-log-row ${l.type}">${l.text}<div style="font-size:9px;color:var(--muted)">${l.time}</div></div>`
+          ).join('');
+        }
+        mgrAddLog('sys','🏁 Auction has ended');
+        return; // stop processing — no other handlers needed
+      }
+
+      // ── PAUSED ─────────────────────────────────────────────────────
       if(updated.status==='paused'){
         if(statusEl) statusEl.textContent='⏸ Auction paused by admin';
         stopMgrTimer();
         mgrAddLog('sys','⏸ Auction paused');
-      } else if(updated.status==='live'){
-        // FIX 2: Detect restart — idx=-1 means auction was reset
-        const isRestart = state.idx===-1 && state.sold===0;
+        return;
+      }
+
+      // ── LIVE — resume, restart, or normal state update ─────────────
+      if(updated.status==='live'){
+        const isRestart = (state.idx===-1 || state.idx==null) && (state.sold===0||state.sold==null);
+        const isResume  = state.auctionEnded===false;
+
         if(isRestart){
-          // Full reset of manager state
+          // Full reset
           stopMgrTimer();
-          mgrAucState.currentPlayer     = null;
-          mgrAucState.currentBid        = 0;
-          mgrAucState.currentBidder     = null;
-          mgrAucState.currentBidderName = null;
-          mgrAucState.soldCount         = 0;
-          mgrAucState.unsoldCount       = 0;
-          mgrAucState.mySquad           = [];
-          // Reset budget from state
-          const myMgr = (state.mgrs||[]).find(m=>m.id===window._mgrUserId);
+          mgrAucState.currentPlayer=null; mgrAucState.currentBid=0;
+          mgrAucState.currentBidder=null; mgrAucState.currentBidderName=null;
+          mgrAucState.soldCount=0; mgrAucState.unsoldCount=0; mgrAucState.mySquad=[];
+          const myMgr=(state.mgrs||[]).find(m=>m.id===window._mgrUserId);
           if(myMgr){ mgrAucState.myBudget=myMgr.budget; document.getElementById('mgr-budget-disp').textContent=myMgr.budget; }
-          // Clear squad display
           const sqEl=document.getElementById('mgr-my-squad');
           if(sqEl) sqEl.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>';
-          const cntEl=document.getElementById('mgr-squad-count');
-          if(cntEl) cntEl.textContent='0 players';
-          // Clear sold/unsold badges
-          const sEl=document.getElementById('mgr-sold-badge'); if(sEl) sEl.textContent='0 Sold';
-          const uEl=document.getElementById('mgr-unsold-badge'); if(uEl) uEl.textContent='0 Unsold';
+          const cntEl=document.getElementById('mgr-squad-count'); if(cntEl) cntEl.textContent='0 players';
+          const sEl=document.getElementById('mgr-sold-badge');    if(sEl)   sEl.textContent='0 Sold';
+          const uEl=document.getElementById('mgr-unsold-badge');  if(uEl)   uEl.textContent='0 Unsold';
+          document.getElementById('mgr-bid-wrap').style.display='none';
+          const logEl=document.getElementById('mat-log'); if(logEl) logEl.innerHTML='';
           renderMgrWaiting('Auction restarted — waiting for admin to start...');
           mgrAddLog('sys','🔄 Auction restarted by admin');
-        } else {
-          if(statusEl&&mgrAucState.currentPlayer) statusEl.textContent='On auction: '+mgrAucState.currentPlayer.n;
-          // Resync timer
-          if(state.timerValue!=null && state.timerTs){
-            const elapsed = Math.round((Date.now()-state.timerTs)/1000);
-            const synced  = Math.max(0, state.timerValue-elapsed);
-            startMgrTimer(synced, state.timerMax||30);
-          }
-          mgrAddLog('sys','▶ Auction resumed');
+          return;
         }
+
+        if(isResume){
+          if(statusEl) statusEl.textContent='▶ Auction resumed — waiting for next player';
+          mgrAddLog('sys','▶ Admin resumed the auction');
+          await refreshMgrCurrentPlayer();
+          return;
+        }
+
+        // Normal live update — resync timer
+        if(state.timerValue!=null && state.timerTs){
+          const elapsed=Math.round((Date.now()-state.timerTs)/1000);
+          const synced=Math.max(0,state.timerValue-elapsed);
+          startMgrTimer(synced, state.timerMax||30);
+        }
+        if(statusEl&&mgrAucState.currentPlayer) statusEl.textContent='On auction: '+mgrAucState.currentPlayer.n;
+        mgrAddLog('sys','▶ Auction resumed');
       }
-      // Sync shared log — show any entries the manager missed
+
+      // Sync shared log for any other status
       if(state.logs && state.logs.length){
         const logEl=document.getElementById('mat-log');
-        if(logEl){
-          logEl.innerHTML=state.logs.slice(0,50).map(l=>`
-            <div class="mat-log-row ${l.type}">
-              ${l.text}<div style="font-size:9px;color:var(--muted)">${l.time}</div>
-            </div>`).join('');
-        }
-      }
-      // FIX 2: Auction ended — clear bid UI on manager screens
-      if(updated.status==='ended'||updated.status==='completed'||state.auctionEnded===true){
-        stopMgrTimer();
-        mgrAucState.currentPlayer = null;
-        renderMgrWaiting('Auction has ended. Check your Squad tab.');
-        const bw=document.getElementById('mgr-bid-wrap');
-        if(bw) bw.style.display='none';
-        const stEl=document.getElementById('mgr-auc-status');
-        if(stEl) stEl.textContent='🏁 Auction ended';
-        mgrAddLog('sys','🏁 Auction has ended');
-      }
-      // FIX 3: Auction resumed by admin
-      if(updated.status==='live' && state.auctionEnded===false && mgrAucState.currentPlayer===null){
-        const stEl=document.getElementById('mgr-auc-status');
-        if(stEl) stEl.textContent='▶ Auction resumed — waiting for next player';
-        mgrAddLog('sys','▶ Admin resumed the auction');
-        // Reload current player
-        await refreshMgrCurrentPlayer();
-      }
-      // FIX 2: Auction restarted by admin — reset manager screen
-      if(updated.status==='reset'||
-        (updated.status==='live' && (updated.state_json?.idx??-1)<0)){
-        stopMgrTimer();
-        mgrAucState.currentPlayer    = null;
-        mgrAucState.currentBid       = 0;
-        mgrAucState.currentBidder    = null;
-        mgrAucState.currentBidderName= null;
-        mgrAucState.mySquad          = [];
-        mgrAucState.soldCount        = 0;
-        mgrAucState.unsoldCount      = 0;
-        // Reload the auction tab from scratch with new auction ID
-        const {data:freshAuc} = await sb.from('auctions')
-          .select('id,status,state_json').eq('league_id',mgrAucState.leagueId)
-          .eq('status','live').order('created_at',{ascending:false}).limit(1).single();
-        if(freshAuc && freshAuc.id!==mgrAucState.auctionId){
-          mgrAucState.auctionId = freshAuc.id;
-          // Re-subscribe to new auction
-          subscribeToMgrAuction();
-        }
-        renderMgrWaiting('Auction restarted by admin — waiting for next player...');
-        document.getElementById('mgr-bid-wrap').style.display='none';
-        const squadEl=document.getElementById('mgr-my-squad');
-        if(squadEl) squadEl.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>';
-        const countEl=document.getElementById('mgr-squad-count');
-        if(countEl) countEl.textContent='0 players';
-        document.getElementById('mgr-sold-badge').textContent  ='0 Sold';
-        document.getElementById('mgr-unsold-badge').textContent='0 Unsold';
-        const budRow=await sb.from('league_members').select('budget_remaining')
-          .eq('league_id',mgrAucState.leagueId).eq('user_id',(await sb.auth.getUser()).data.user.id).single();
-        mgrAucState.myBudget=parseFloat(budRow.data?.budget_remaining||0);
-        document.getElementById('mgr-budget-disp').textContent=mgrAucState.myBudget;
-        mgrAddLog('sys','🔄 Admin restarted the auction');
-        const logEl=document.getElementById('mat-log');
-        if(logEl) logEl.innerHTML='';
+        if(logEl) logEl.innerHTML=state.logs.slice(0,50).map(l=>
+          `<div class="mat-log-row ${l.type}">${l.text}<div style="font-size:9px;color:var(--muted)">${l.time}</div></div>`
+        ).join('');
       }
     })
     .subscribe();
