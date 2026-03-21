@@ -1507,9 +1507,14 @@ async function openLeague(lgId){
     });
   }
   document.getElementById('d-budget').textContent=dbBudget;
-  // FIX 5: Transfers tab — controlled by admin toggle (transfers_open flag)
+  // FIX 1: Re-fetch transfers_open from Supabase to ensure it's current
+  try{
+    const {data:lgFresh} = await sb.from('leagues').select('transfers_open').eq('id',lgId).single();
+    if(lgFresh && lg) lg.transfers_open = lgFresh.transfers_open;
+  }catch(e){}
   const xt=document.getElementById('dt-transfers');
-  xt.className='nav-tab'+(lg.transfers_open===true?'':' off');
+  // FIX 2: Transfers tab always clickable — button state controls ability to transfer
+  xt.className='nav-tab';
   // Auction tab — show and pulse if league auction is live
   const aucTabEl=document.getElementById('dt-auction');
   const aucPulseEl=document.getElementById('dt-auction-pulse');
@@ -2621,32 +2626,142 @@ function renderPts(){
     </div></div>`;
 }
 // TRANSFERS
-function renderTransfers(){
+async function renderTransfers(){
   const lg=LEAGUES_DB.find(x=>x.id===CL_ID);
-  const isOpen=lg&&lg.transferGWs.includes(lg.gw);
+  // FIX 2: Use transfers_open flag, not GW-based check
+  const isOpen = lg?.transfers_open===true;
   const cont=document.getElementById('xfer-content');
-  if(!isOpen){
-    const wins=(lg?.transferGWs||[]).map((gw,i)=>`<div style="display:flex;align-items:center;justify-content:space-between;background:var(--s2);border-radius:7px;padding:7px 11px;margin-bottom:7px"><div><div style="font-size:12px;font-weight:500">Window ${i+1}</div><div style="font-size:10px;color:var(--muted)">GW${gw}</div></div><span class="badge ${gw>curGW?'b-blue':'b-red'}">${gw>curGW?'Upcoming':'Closed'}</span></div>`).join('');
-    cont.innerHTML=`<div style="padding:28px;text-align:center"><div style="font-size:32px;margin-bottom:8px">🔒</div><div style="font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:1px;margin-bottom:5px">Transfer Window Closed</div><div style="font-size:12px;color:var(--muted);margin-bottom:14px">Only available during configured gameweeks.</div>${wins}</div>`;
-    return;
-  }
+  if(!cont) return;
+
+  // Always load squad from Supabase so we have latest
+  const {data:{user}} = await sb.auth.getUser();
+  const freshSquad = await sbGetSquad(CL_ID, user.id);
+  if(freshSquad.length) squad = freshSquad;
+
+  // Get fresh budget
+  const {data:memRow} = await sb.from('league_members')
+    .select('budget_remaining').eq('league_id',CL_ID).eq('user_id',user.id).single();
+  if(memRow) dbBudget = parseFloat(memRow.budget_remaining||dbBudget);
+  document.getElementById('d-budget').textContent=dbBudget;
+
+  // Build status banner
+  const statusBanner = isOpen
+    ? `<div style="background:rgba(0,212,170,.1);border:1px solid rgba(0,212,170,.3);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--green);font-weight:500;margin-bottom:12px">
+        ✅ Transfer window is open — admin has enabled transfers.
+       </div>`
+    : `<div style="background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--muted);margin-bottom:12px">
+        🔒 Transfer window is closed. Admin controls when transfers are open.
+       </div>`;
+
   cont.innerHTML=`
+    ${statusBanner}
     <div class="card" style="padding:13px;margin-bottom:13px">
       <div style="display:flex;gap:9px;margin-bottom:9px">
-        <div style="flex:1;background:var(--s2);border-radius:7px;padding:9px;text-align:center"><div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--green)">₹${dbBudget}cr</div><div style="font-size:9px;color:var(--muted)">Available budget</div></div>
-        <div style="flex:1;background:var(--s2);border-radius:7px;padding:9px;text-align:center"><div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--muted)">80%</div><div style="font-size:9px;color:var(--muted)">Return on sell</div></div>
+        <div style="flex:1;background:var(--s2);border-radius:7px;padding:9px;text-align:center">
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--green)">₹${dbBudget}cr</div>
+          <div style="font-size:9px;color:var(--muted)">Available budget</div>
+        </div>
+        <div style="flex:1;background:var(--s2);border-radius:7px;padding:9px;text-align:center">
+          <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--muted)">80%</div>
+          <div style="font-size:9px;color:var(--muted)">Return on sell</div>
+        </div>
       </div>
-      <div style="font-size:10px;color:var(--muted);padding:7px;background:var(--s2);border-radius:6px">Transferred-out players re-enter auction in GW${lg.transferGWs[0]} alongside unsold players.</div>
+      <div style="font-size:10px;color:var(--muted);padding:7px;background:var(--s2);border-radius:6px">
+        Transferring out returns 80% of purchase price. Player goes back to auction queue.
+      </div>
     </div>
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:1px;color:var(--muted);margin-bottom:7px">Transfer Out (tap to select)</div>
-    <div id="xf-out"></div>
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:1px;color:var(--muted);margin:11px 0 7px">Available Players</div>
-    <div id="xf-in"></div>`;
-  document.getElementById('xf-out').innerHTML=squad.map(p=>{const rv=parseFloat((p.price*.8).toFixed(1));const loss=parseFloat((p.price-rv).toFixed(1));return`<div class="xfer-row" id="xfo-${p.id}"><div class="xfer-av ${RC[p.r]}">${p.ini}</div><div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600">${p.n} ${p.xi?'<span class="badge b-green" style="font-size:8px">XI</span>':''}</div><div style="font-size:9px;color:var(--muted)">${p.t} · ₹${p.price}cr bought · return ₹${rv}cr <span style="color:var(--red)">(-₹${loss}cr)</span></div></div><span style="font-family:'Bebas Neue',sans-serif;font-size:12px;color:var(--gold);flex-shrink:0">₹${rv}cr</span><button class="btn-sm red" style="font-size:11px" onclick="selOut(${p.id})">Out</button></div>`;}).join('');
-  document.getElementById('xf-in').innerHTML=AVAIL_PLAYERS.map(p=>`<div class="xfer-row"><div class="xfer-av ${RC[p.r]}">${p.ini}</div><div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:600">${p.n}</div><div style="font-size:9px;color:var(--muted)">${p.t} · ${RN[p.r]} · ₹${p.price}cr</div></div><span style="font-family:'Bebas Neue',sans-serif;font-size:12px;color:var(--gold);flex-shrink:0">₹${p.price}cr</span><button class="btn-sm green" style="font-size:11px" onclick="selIn(${p.id})">In</button></div>`).join('');
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:1px;color:var(--muted);margin-bottom:7px">
+      My Squad (${squad.length} players)
+    </div>
+    <div id="xf-out"></div>`;
+
+  // FIX 2+3: Render squad rows. Out button disabled when toggle off.
+  document.getElementById('xf-out').innerHTML = squad.length
+    ? squad.map(p=>{
+        const rv   = parseFloat((p.price*.8).toFixed(1));
+        const loss = parseFloat((p.price-rv).toFixed(1));
+        const outBtn = isOpen
+          ? `<button class="btn-sm red" style="font-size:11px;flex-shrink:0"
+               onclick="doTransferOut(${p.id},'${p.n.replace(/'/g,'')}',${p.price})">Transfer Out</button>`
+          : `<button class="btn-sm" style="font-size:11px;flex-shrink:0;opacity:.35;cursor:not-allowed" disabled>Transfer Out</button>`;
+        return`<div class="xfer-row" id="xfo-${p.id}">
+          <div class="xfer-av ${RC[p.r]}">${p.ini}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;font-weight:600">${p.n} ${p.xi?'<span class="badge b-green" style="font-size:8px">XI</span>':''}</div>
+            <div style="font-size:9px;color:var(--muted)">${p.t} · ₹${p.price}cr bought · return ₹${rv}cr
+              <span style="color:var(--red)">(-₹${loss}cr)</span>
+            </div>
+          </div>
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--gold);flex-shrink:0;margin-right:6px">₹${rv}cr</span>
+          ${outBtn}
+        </div>`;
+      }).join('')
+    : '<div style="padding:16px;text-align:center;color:var(--muted);font-size:12px">No players in squad yet.</div>';
 }
-function selOut(id){pendingOut=id;document.querySelectorAll('.btn-sm.red').forEach(b=>{if(b.textContent==='✓'||b.textContent==='Out'){b.textContent='Out';b.style.borderColor='';b.style.color='';}});const btn=document.querySelector(`#xfo-${id} .btn-sm`);if(btn){btn.textContent='✓';btn.style.borderColor='var(--gold)';btn.style.color='var(--gold)';}showToast('Now select a player to bring IN','info');}
-function selIn(inId){if(!pendingOut){showToast('First select a player OUT','error');return;}const op=squad.find(p=>p.id===pendingOut);const ip=AVAIL_PLAYERS.find(p=>p.id===inId);if(!op||!ip)return;const rv=op.price*.8;const nb=parseFloat((dbBudget+rv-ip.price).toFixed(1));if(nb<0){showToast('Not enough budget','error');return;}dbBudget=nb;document.getElementById('d-budget').textContent=dbBudget;showToast(op.n+' OUT → '+ip.n+' IN · Budget ₹'+dbBudget+'cr','success');pendingOut=null;renderTransfers();}
+
+// FIX 3: Transfer out — Supabase-backed
+async function doTransferOut(playerId, playerName, boughtPrice){
+  const rv = parseFloat((boughtPrice * 0.8).toFixed(1));
+  const loss = parseFloat((boughtPrice - rv).toFixed(1));
+  showConfirm(
+    'Transfer Out '+playerName+'?',
+    'You will receive ₹'+rv+'cr (80% of ₹'+boughtPrice+'cr). You lose ₹'+loss+'cr. Player returns to the auction queue.',
+    async ()=>{
+      const {data:{user}} = await sb.auth.getUser();
+      showToast('Transferring out '+playerName+'...','info');
+
+      // 1. Remove from squads table
+      const {error:sqErr} = await sb.from('squads')
+        .delete().eq('league_id',CL_ID).eq('user_id',user.id).eq('player_id',playerId);
+      if(sqErr){ showToast('Transfer failed: '+sqErr.message,'error'); return; }
+
+      // 2. Update local squad
+      squad = squad.filter(p=>p.id!==playerId);
+      dbBudget = parseFloat((dbBudget+rv).toFixed(1));
+      document.getElementById('d-budget').textContent=dbBudget;
+
+      // 3. Update budget_remaining in league_members
+      await sb.from('league_members')
+        .update({budget_remaining:dbBudget})
+        .eq('league_id',CL_ID).eq('user_id',user.id);
+
+      // FIX 4: Update stat cards
+      const scBudget=document.getElementById('sc-budget');
+      if(scBudget) scBudget.textContent='₹'+dbBudget+'cr';
+
+      // 4. Push player back into auction_queue with base price
+      //    Find the auction for this league
+      const {data:aucRow} = await sb.from('auctions')
+        .select('id').eq('league_id',CL_ID)
+        .in('status',['live','paused','ended'])
+        .order('created_at',{ascending:false}).limit(1).single();
+
+      if(aucRow){
+        // Insert new queue entry at the end
+        const {data:maxQ} = await sb.from('auction_queue')
+          .select('queue_order').eq('auction_id',aucRow.id)
+          .order('queue_order',{ascending:false}).limit(1).single();
+        const nextOrder = (maxQ?.queue_order||0)+1;
+        await sb.from('auction_queue').insert({
+          auction_id:  aucRow.id,
+          player_id:   playerId,
+          queue_order: nextOrder,
+          status:      'pending'
+        });
+      }
+
+      // 5. FIX 4: Refresh My Squad in Auction tab if visible
+      if(typeof refreshMgrSquad==='function') await refreshMgrSquad();
+
+      showToast(playerName+' transferred out · ₹'+rv+'cr returned','success');
+      renderTransfers();
+      renderSquadFull();
+    }
+  );
+}
+
+function selOut(id){ /* legacy stub */ doTransferOut(id,'Player',0); }
+function selIn(inId){ showToast('Select a player to transfer out first','info'); }
 // FIXTURES
 async function renderFixtures(){
   const xiTeams=squad.filter(p=>p.xi).map(p=>p.t);
@@ -3016,6 +3131,7 @@ async function refreshMgrSquad(){
   if(!squadEl) return;
   if(!merged.length){
     squadEl.innerHTML='<div style="padding:12px;text-align:center;color:var(--muted);font-size:12px">No players won yet</div>';
+    if(countEl) countEl.textContent='0 players';
     return;
   }
   const roleLabel={BAT:'Batsman',BWL:'Bowler',AR:'All-rounder',WK:'Keeper'};
@@ -3534,6 +3650,26 @@ function subscribeToMgrAuction(){
         if(logEl) logEl.innerHTML=state.logs.slice(0,50).map(l=>
           `<div class="mat-log-row ${l.type}">${l.text}<div style="font-size:9px;color:var(--muted)">${l.time}</div></div>`
         ).join('');
+      }
+    })
+    // FIX 1: Listen for league updates (transfers_open toggle)
+    .on('postgres_changes',{
+      event:'UPDATE', schema:'public', table:'leagues',
+      filter:'id=eq.'+mgrAucState.leagueId
+    }, (payload)=>{
+      const updated = payload.new;
+      // Update local cache
+      const lg = LEAGUES_DB.find(x=>x.id===mgrAucState.leagueId);
+      if(lg) lg.transfers_open = updated.transfers_open;
+      // Update the Transfers tab state immediately
+      const xt=document.getElementById('dt-transfers');
+      if(xt) xt.className='nav-tab'+(updated.transfers_open===true?'':' off');
+      const msg=updated.transfers_open===true?'Transfer window opened by admin':'Transfer window closed by admin';
+      showToast(msg, updated.transfers_open===true?'success':'info');
+      mgrAddLog('sys', updated.transfers_open===true?'🔄 Transfer window opened':'🔒 Transfer window closed');
+      // If transfers tab is currently open, re-render it
+      if(document.getElementById('tab-transfers')?.classList.contains('active')){
+        renderTransfers();
       }
     })
     .subscribe();
