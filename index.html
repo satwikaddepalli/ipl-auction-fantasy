@@ -1932,6 +1932,46 @@ async function saveAuctionState(status){
   }).eq('id',aucConfig.auctionId);
 }
 
+
+async function syncAdminSquadsFromDB(){
+  if(!aucConfig.leagueId) return;
+  // Re-fetch all squads for this league from Supabase
+  const {data:allSquads,error} = await sb.from('squads')
+    .select('user_id,player_id,bought_price,players(id,name,ipl_team_code,role,base_price)')
+    .eq('league_id', aucConfig.leagueId);
+  if(error){ console.error('syncAdminSquadsFromDB',error); return; }
+
+  // Rebuild each manager's squad from DB data
+  for(const mgr of aucMgrs){
+    const mgrRows = (allSquads||[]).filter(s=>s.user_id===mgr.id);
+    mgr.squad = mgrRows.map(s=>{
+      const p = s.players;
+      const words = p.name.split(' ');
+      const ini = words.map(w=>w[0]).join('').substring(0,3).toUpperCase();
+      return {
+        id: s.player_id, n: p.name, t: p.ipl_team_code,
+        r: p.role, ini, base: parseFloat(p.base_price),
+        soldPrice: parseFloat(s.bought_price), soldTo: mgr.id
+      };
+    });
+  }
+
+  // Re-fetch budgets for all managers
+  const {data:members} = await sb.from('league_members')
+    .select('user_id,budget_remaining').eq('league_id',aucConfig.leagueId);
+  (members||[]).forEach(mem=>{
+    const mgr=aucMgrs.find(m=>m.id===mem.user_id);
+    if(mgr) mgr.budget=parseFloat(mem.budget_remaining||mgr.budget);
+  });
+
+  // Re-render everything that shows squad data
+  renderBiddersBar();
+  if(document.getElementById('auc-scoreboard')?.style.display!=='none'){
+    renderSB(sbCurrentTab);
+  }
+  addLog('sys','🔄 Squad updated (transfer)');
+}
+
 function subscribeAdminToAuction(){
   // Unsubscribe any existing admin channel
   if(window._adminAucChannel){
@@ -2023,27 +2063,19 @@ function subscribeAdminToAuction(){
       addLog('sys', '🔄 '+pRow.name+' returned to queue (transferred out by manager)');
       renderQueueList();
     })
-    // ── Listen for squads DELETEs (player transferred out) ──
+    // ── Listen for squads changes (transfer out removes a row) ──
+    // Use DELETE + UPDATE events. payload.old may not have all columns
+    // (requires REPLICA IDENTITY FULL), so we re-fetch all squads from DB.
     .on('postgres_changes',{
       event:'DELETE', schema:'public', table:'squads'
-    }, async (payload)=>{
-      const row = payload.old;
-      if(!row || row.league_id !== aucConfig.leagueId) return;
-      // Remove player from the relevant manager's aucMgrs squad
-      const mgr = aucMgrs.find(m=>m.id===row.user_id);
-      if(mgr){
-        mgr.squad = mgr.squad.filter(p=>p.id!==row.player_id);
-        // Also update their budget from league_members
-        const {data:memRow} = await sb.from('league_members')
-          .select('budget_remaining').eq('league_id',aucConfig.leagueId)
-          .eq('user_id',row.user_id).single();
-        if(memRow) mgr.budget = parseFloat(memRow.budget_remaining||mgr.budget);
-      }
-      // Re-render scoreboard if visible
-      if(document.getElementById('auc-scoreboard')?.style.display!=='none'){
-        renderSB(sbCurrentTab);
-      }
-      addLog('sys', 'Manager transferred out a player');
+    }, async ()=>{
+      await syncAdminSquadsFromDB();
+    })
+    .on('postgres_changes',{
+      event:'INSERT', schema:'public', table:'squads'
+    }, async ()=>{
+      // Also catch new squad rows (in case endAuction writes them)
+      await syncAdminSquadsFromDB();
     })
     .subscribe();
 }
