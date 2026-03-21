@@ -3318,23 +3318,26 @@ function subscribeToMgrAuction(){
       const {data:prof}=await sb.from('profiles').select('name').eq('id',bid.bidder_id).single();
       const bidderName=prof?.name||(isMe?CU.name:'Someone');
 
-      // Only update state if this is a higher bid than current
-      // (first bid at base, or outbid). Same amount means a tie —
-      // admin keeps first winner; manager screen ignores duplicate.
       if(newAmount > mgrAucState.currentBid ||
         (newAmount === mgrAucState.currentBid && !mgrAucState.currentBidder)){
-        // This is the new leading bid
-        mgrAucState.currentBid         = newAmount;
-        mgrAucState.currentBidder      = bid.bidder_id;
-        mgrAucState.currentBidderName  = bidderName;
+        // New highest bid OR opening bid at base — update leader
+        mgrAucState.currentBid        = newAmount;
+        mgrAucState.currentBidder     = bid.bidder_id;
+        mgrAucState.currentBidderName = bidderName;
+        mgrAddLog(isMe?'mine':'bid', bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr');
         renderMgrSpotlight();
         startMgrTimer(Math.min(20, mgrTimerMax), mgrTimerMax);
+
       } else if(newAmount === mgrAucState.currentBid && mgrAucState.currentBidder !== bid.bidder_id){
-        // Tie — log it but don't change leader
+        // Tied bid — first bidder already set as leader, don't change it.
+        // MUST still call renderMgrSpotlight() so the losing manager's
+        // button is re-enabled (their _mgrUserId !== currentBidder).
         mgrAddLog('bid', bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr (tied — first wins)');
-        return;
+        renderMgrSpotlight(); // ← this is what was missing: re-renders button state for loser
+
+      } else {
+        // Lower or duplicate bid — ignore silently
       }
-      mgrAddLog(isMe?'mine':'bid', bidderName+(isMe?' (You)':'')+' bid ₹'+bid.amount+'cr');
     })
     // Listen for queue changes — next player or sold/unsold
     .on('postgres_changes',{
