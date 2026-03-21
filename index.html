@@ -2165,21 +2165,53 @@ function subscribeAdminToAuction(){
       addLog('sys', '🔄 '+pRow.name+' returned to queue (transferred out by manager)');
       renderQueueList();
     })
-    // ── Listen for squads changes (transfer out removes a row) ──
-    // Use DELETE + UPDATE events. payload.old may not have all columns
-    // (requires REPLICA IDENTITY FULL), so we re-fetch all squads from DB.
-    .on('postgres_changes',{
-      event:'DELETE', schema:'public', table:'squads'
-    }, async ()=>{
+    // ── Listen for squads changes via postgres_changes (needs REPLICA IDENTITY FULL) ──
+    .on('postgres_changes',{event:'DELETE',schema:'public',table:'squads'},async()=>{
       await syncAdminSquadsFromDB();
     })
-    .on('postgres_changes',{
-      event:'INSERT', schema:'public', table:'squads'
-    }, async ()=>{
-      // Also catch new squad rows (in case endAuction writes them)
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'squads'},async()=>{
       await syncAdminSquadsFromDB();
     })
     .subscribe();
+
+  // ── Also subscribe to broadcast channel for transfer events ──
+  // Works without REPLICA IDENTITY FULL — manager sends, admin receives
+  if(window._adminTransferChannel){
+    sb.removeChannel(window._adminTransferChannel);
+    window._adminTransferChannel=null;
+  }
+  if(aucConfig.leagueId){
+    window._adminTransferChannel = sb.channel('league-transfer-'+aucConfig.leagueId)
+      .on('broadcast',{event:'transfer_out'}, async ({payload})=>{
+        const {auctionId, playerId, playerName} = payload;
+
+        // 1. Sync squads — removes transferred player from admin's Live Squad view
+        await syncAdminSquadsFromDB();
+
+        // 2. Add player back to in-memory aucQueue
+        const alreadyIn = aucQueue.find(p=>p.id===playerId);
+        if(!alreadyIn){
+          const {data:pRow} = await sb.from('players')
+            .select('id,name,ipl_team_code,role,base_price').eq('id',playerId).single();
+          if(pRow){
+            const ini=pRow.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase();
+            aucQueue.push({
+              id:pRow.id, n:pRow.name, t:pRow.ipl_team_code,
+              r:pRow.role, ini, base:parseFloat(pRow.base_price),
+              stats:{}, soldTo:null, unsold:false, soldPrice:0, transferredBack:true
+            });
+            renderQueueList();
+            addLog('sys','🔄 '+pRow.name+' returned to queue (transferred out)');
+          }
+        }
+
+        // 3. Re-render scoreboard if visible
+        if(document.getElementById('auc-scoreboard')?.style.display!=='none'){
+          renderSB(sbCurrentTab);
+        }
+      })
+      .subscribe();
+  }
 }
 
 /* ══════════════════════════════════════════
@@ -2946,24 +2978,37 @@ async function doTransferOut(playerId, playerName, boughtPrice){
       const scBudget=document.getElementById('sc-budget');
       if(scBudget) scBudget.textContent='₹'+dbBudget+'cr';
 
-      // 4. Push player back into auction_queue with base price
-      //    Find the auction for this league
+      // 4. Push player back into auction_queue
+      //    Find the auction for this league (any non-setup status)
       const {data:aucRow} = await sb.from('auctions')
-        .select('id').eq('league_id',CL_ID)
-        .in('status',['live','paused','ended'])
+        .select('id,status').eq('league_id',CL_ID)
         .order('created_at',{ascending:false}).limit(1).single();
 
       if(aucRow){
-        // Insert new queue entry at the end
+        // Get next queue_order
         const {data:maxQ} = await sb.from('auction_queue')
           .select('queue_order').eq('auction_id',aucRow.id)
           .order('queue_order',{ascending:false}).limit(1).single();
         const nextOrder = (maxQ?.queue_order||0)+1;
-        await sb.from('auction_queue').insert({
+        const {error:qErr} = await sb.from('auction_queue').insert({
           auction_id:  aucRow.id,
           player_id:   playerId,
           queue_order: nextOrder,
           status:      'pending'
+        });
+        if(qErr) console.error('queue insert error:',qErr);
+
+        // Broadcast transfer event to admin screen via shared channel
+        // (more reliable than relying on postgres_changes REPLICA IDENTITY)
+        const broadcastCh = sb.channel('league-transfer-'+CL_ID);
+        await broadcastCh.subscribe(async (status)=>{
+          if(status==='SUBSCRIBED'){
+            await broadcastCh.send({
+              type:'broadcast', event:'transfer_out',
+              payload:{ auctionId:aucRow.id, playerId, playerName, userId:user.id }
+            });
+            setTimeout(()=>sb.removeChannel(broadcastCh), 1000);
+          }
         });
       }
 
