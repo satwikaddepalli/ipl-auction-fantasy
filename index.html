@@ -421,7 +421,7 @@ input,select{font-family:'DM Sans',sans-serif;color:var(--text)}
 <div id="s-login" class="screen auth-bg active">
   <div class="auth-wrap">
     <!-- Brand -->
-    <div class="brand">IPL<br>Fantasy<sub>LEAGUE 2025</sub></div>
+    <div class="brand">IPL<br>Fantasy<sub>LEAGUE 2026</sub></div>
     <div class="auth-divider-line"></div>
     <div style="font-size:9px;color:rgba(255,255,255,.4);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px">Your Dream Team Starts Here</div>
 
@@ -1095,7 +1095,7 @@ function normPlayer(p){
   const words = p.name.split(' ');
   const ini = words.map(w=>w[0]).join('').substring(0,3).toUpperCase();
   const stats = (p.role==='BAT'||p.role==='WK') ? {avg:'-',sr:'-'} : {wkts:'-',eco:'-'};
-  return {id:p.id, n:p.name, t:p.ipl_team_code, r:p.role, ini, base:parseFloat(p.base_price), stats};
+  return {id:p.id, n:p.name, t:p.ipl_team_code, r:p.role, ini, base:parseFloat(p.base_price), stats, set:parseInt(p.auction_set||1), nat:p.nationality||'India'};
 }
 function normSquadRow(s){
   const words = s.players.name.split(' ');
@@ -1111,7 +1111,8 @@ async function sbGetPlayers(role){
   // Fetch players — no active/season filter to avoid missing rows.
   // Relies on RLS: players_select_all policy must be enabled for authenticated users.
   let q = sb.from('players')
-    .select('id,name,ipl_team_code,role,base_price')
+    .select('id,name,ipl_team_code,role,base_price,auction_set,nationality')
+    .order('auction_set',{ascending:true})
     .order('base_price',{ascending:false});
   if(role && role!=='ALL') q = q.eq('role',role);
   const {data,error} = await q;
@@ -1928,13 +1929,21 @@ async function filterPP(role,el){
     const players=await sbGetPlayers(role==='ALL'?null:role);
     if(players.length){
       PLAYERS_DATA=players;
-      preview.innerHTML=players.map(p=>`
-        <div class="pp-item">
+      preview.innerHTML=`
+        <div style="display:grid;grid-template-columns:28px 1fr 60px 54px;gap:0;padding:5px 8px;font-size:9px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border)">
+          <div></div><div>Player</div><div style="text-align:right">Base</div><div style="text-align:center">Set</div>
+        </div>`+
+        players.map(p=>`
+        <div class="pp-item" style="grid-template-columns:28px 1fr 60px 54px">
           <div class="pp-av ${RC[p.r]}">${p.ini}</div>
           <span style="font-size:11px;font-weight:500;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
             title="${p.n}">${p.n}</span>
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold);flex-shrink:0">
+          <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold);flex-shrink:0;text-align:right">
             &#x20b9;${p.base}cr</span>
+          <select style="font-size:10px;background:var(--s2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:1px 3px;cursor:pointer;text-align:center"
+            onchange="updatePlayerSet(${p.id},this.value)">
+            ${[1,2,3,4,5,6,7,8,9,10].map(n=>`<option value="${n}" ${(p.set||1)===n?'selected':''}>${n}</option>`).join('')}
+          </select>
         </div>`).join('');
     } else if(!preview.innerHTML.includes('Failed')){
       preview.innerHTML=`<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px">
@@ -1949,6 +1958,17 @@ async function filterPP(role,el){
   }
 }
 function copyCode(){const c=document.getElementById('as-code').textContent;navigator.clipboard?.writeText(c).catch(()=>{});showToast('Code copied: '+c,'success');}
+
+async function updatePlayerSet(playerId, setNo){
+  const setNum = parseInt(setNo);
+  // Update local PLAYERS_DATA cache
+  const p = PLAYERS_DATA.find(x=>x.id===playerId);
+  if(p) p.set = setNum;
+  // Persist to Supabase
+  const {error} = await sb.from('players').update({auction_set:setNum}).eq('id',playerId);
+  if(error) showToast('Failed to save set: '+error.message,'error');
+  else showToast('Set '+setNum+' saved','success');
+}
 async function launchAuction(){
   // Get league config from the current control room league
   const crLg = LEAGUES_DB.find(x=>x.id===controlRoomLeagueId) || {};
@@ -1980,7 +2000,10 @@ async function launchAuction(){
   if(!aucMgrs.length){showToast('No managers in league yet','error');return;}
   // PLAYERS_DATA already loaded by filterPP; if empty, load now
   if(!PLAYERS_DATA.length){ PLAYERS_DATA=await sbGetPlayers(); }
-  aucQueue=PLAYERS_DATA.map(p=>({...p,soldTo:null,unsold:false,soldPrice:0}));
+  // Sort by set number first, then by base price descending within each set
+  aucQueue=PLAYERS_DATA
+    .map(p=>({...p,soldTo:null,unsold:false,soldPrice:0}))
+    .sort((a,b)=>(a.set||1)-(b.set||1)||(b.base-a.base));
   aucIdx=-1;aucBid=0;aucTop=null;aucSold=0;aucUnsold=0;aucLogs=[];aucPaused=false;
   // Save inProgress state against this league
   const curAdminLg=LEAGUES_DB.filter(lg=>lg.adminId===CU.id).slice(-1)[0];
@@ -2230,11 +2253,18 @@ function showAucScreen(id){
 // QUEUE
 function renderQueueList(){
   const list=document.getElementById('queue-list');
+  if(!list) return;
+  let prevSet=null;
   list.innerHTML=aucQueue.map((p,i)=>{
     const done=!!p.soldTo,unsold=p.unsold&&!p.soldTo,active=i===aucIdx;
     const drag=!done&&!unsold&&!active;
-    const badge=p.soldTo?`<span class="badge b-green" style="font-size:8px">₹${p.soldPrice}cr</span>`:p.unsold?`<span class="badge b-red" style="font-size:8px;cursor:pointer" onclick="reAuction(${p.id})" title="Re-auction">↩</span>`:'';
-    return`<div class="qi ${done?'qi-sold':''} ${unsold?'qi-unsold':''} ${active?'qi-active':''}"
+    const badge=done?`<span class="badge b-green" style="font-size:8px">₹${p.soldPrice}cr</span>`:unsold?`<span class="badge b-red" style="font-size:8px;cursor:pointer" onclick="reAuction(${p.id})" title="Re-auction">↩</span>`:'';
+    const curSet=p.set||1;
+    const setHeader=(!done&&!unsold&&curSet!==prevSet)
+      ?`<div style="padding:4px 10px 2px;font-size:9px;font-weight:700;color:var(--gold);letter-spacing:1.5px;text-transform:uppercase;background:rgba(245,166,35,.07);border-top:1px solid rgba(245,166,35,.15);border-bottom:1px solid rgba(245,166,35,.1)">Set ${curSet}</div>`
+      :'';
+    if(!done&&!unsold) prevSet=curSet;
+    return setHeader+`<div class="qi ${done?'qi-sold':''} ${unsold?'qi-unsold':''} ${active?'qi-active':''}"
       draggable="${drag}" data-qidx="${i}"
       ondragstart="${drag?'qdragStart(event,'+i+')':'event.preventDefault()'}"
       ondragover="${drag?'qdragOver(event)':''}"
@@ -2242,7 +2272,7 @@ function renderQueueList(){
       ondragend="qdragEnd()">
       ${drag?'<span style="color:var(--muted);font-size:11px;flex-shrink:0">⠿</span>':'<span style="width:11px;flex-shrink:0"></span>'}
       <div class="qi-av ${RC[p.r]}">${p.ini}</div>
-      <div style="flex:1;min-width:0"><div class="qi-name">${p.n}</div><div class="qi-sub">${p.t} · ₹${p.base}cr</div></div>
+      <div style="flex:1;min-width:0"><div class="qi-name">${p.n}</div><div class="qi-sub">${p.t} · ₹${p.base}cr · Set ${p.set||1}</div></div>
       ${badge}
     </div>`;
   }).join('');
@@ -2252,6 +2282,36 @@ function qdragStart(e,i){aucDragSrc=i;e.dataTransfer.effectAllowed='move';setTim
 function qdragOver(e){e.preventDefault();document.querySelectorAll('.qi').forEach(r=>r.classList.remove('drag-over'));e.currentTarget.classList.add('drag-over');}
 function qdrop(e,t){e.preventDefault();if(aucDragSrc===null||aucDragSrc===t)return;const s=aucQueue.splice(aucDragSrc,1)[0];aucQueue.splice(t,0,s);if(aucIdx===aucDragSrc)aucIdx=t;aucDragSrc=null;renderQueueList();showToast('Queue reordered','info');}
 function qdragEnd(){document.querySelectorAll('.qi').forEach(r=>{r.classList.remove('dragging');r.classList.remove('drag-over');});aucDragSrc=null;}
+
+/* ── IPL Team Colours ── */
+const IPL_TEAM_COLORS = {
+  MI:  { bg:'#004BA0', accent:'#5BB8F5', ring:'#002D6B' },
+  CSK: { bg:'#F9CD05', accent:'#1A1A1A', ring:'#C9A500' },
+  RCB: { bg:'#C8102E', accent:'#FFD700', ring:'#8B0000' },
+  KKR: { bg:'#3A225D', accent:'#C5A028', ring:'#1E1040' },
+  DC:  { bg:'#0078BC', accent:'#EF1C25', ring:'#004F7C' },
+  PBKS:{ bg:'#ED1B24', accent:'#FFD700', ring:'#A00000' },
+  RR:  { bg:'#E8005D', accent:'#FFF', ring:'#9C003E' },
+  SRH: { bg:'#F26522', accent:'#FFF',   ring:'#B84A10' },
+  GT:  { bg:'#1C1C1C', accent:'#DFA860', ring:'#0A0A0A' },
+  LSG: { bg:'#A72B6D', accent:'#FFF',   ring:'#6E1A46' },
+};
+
+function iplTeamAvatar(teamCode, size=64, fontSize=16){
+  const tc = IPL_TEAM_COLORS[teamCode] || { bg:'#1a2740', accent:'#F5A623', ring:'#0d1421' };
+  return `<div style="
+    width:${size}px;height:${size}px;border-radius:50%;flex-shrink:0;
+    background:${tc.bg};
+    border:3px solid ${tc.ring};
+    box-shadow:0 0 0 2px ${tc.accent}33, 0 4px 12px rgba(0,0,0,.4);
+    display:flex;align-items:center;justify-content:center;
+    font-family:'Bebas Neue',sans-serif;
+    font-size:${fontSize}px;
+    color:${tc.accent};
+    letter-spacing:1px;
+    font-weight:700;
+  ">${teamCode}</div>`;
+}
 // AUCTION ENGINE
 async function nextPlayer(){
   if(aucInterval)clearInterval(aucInterval);
@@ -2434,8 +2494,12 @@ function renderAucCenter(p){
     <div class="spotlight">
       <div class="sold-ov" id="sold-ov"><div class="sold-stamp" id="sold-stamp">SOLD</div><div class="sold-sub-txt" id="sold-sub"></div></div>
       <div class="sp-top">
-        <div class="big-av ${RC[p.r]}">${p.ini}</div>
-        <div><div class="sp-name">${p.n}</div><div class="sp-sub">${p.t} · ${RN[p.r]} · Base ₹${p.base}cr</div><div class="sp-stats">${buildStats(p)}</div></div>
+        ${iplTeamAvatar(p.t, 64, 18)}
+        <div>
+          <div class="sp-name">${p.n}</div>
+          <div class="sp-sub">${p.t} · ${RN[p.r]} · ${(p.nat&&p.nat!=='India')?'✈ '+p.nat:p.nat||'India'}</div>
+          <div class="sp-stats">${buildStats(p)}</div>
+        </div>
       </div>
       <div class="sp-bid-area">
         <div class="bid-lbl">Current bid</div>
@@ -3379,6 +3443,7 @@ async function refreshMgrCurrentPlayer(){
     t:    p.t    || p.ipl_team_code,
     r:    p.r    || p.role,
     base: parseFloat(p.base || p.base_price || 1),
+    nat:  p.nat || p.nationality || 'India',
     ini:  p.ini  || (p.n||p.name||'?').split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()
   };
 
@@ -3532,11 +3597,13 @@ function renderMgrSpotlight(){
   if(!el) return;
   el.innerHTML=`
     <div style="padding:14px 16px;display:flex;gap:12px;align-items:center">
-      <div class="big-av ${rcClass}" style="width:52px;height:52px;font-size:17px;flex-shrink:0">${p.ini}</div>
+      ${iplTeamAvatar(p.t, 52, 14)}
       <div style="flex:1;min-width:0">
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">${p.t} · ${RN[p.r]||p.r}</div>
         <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:1px;line-height:1">${p.n}</div>
-        <div style="font-size:11px;color:var(--muted);margin-top:2px">Base ₹${p.base}cr</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">
+          ${(p.nat&&p.nat!=='India')?'<span style="color:var(--accent)">✈ '+p.nat+'</span>':'🇮🇳 '+( p.nat||'India')}
+        </div>
       </div>
       <div class="timer-ring" style="flex-shrink:0">
         <svg width="56" height="56" viewBox="0 0 64 64">
