@@ -1094,7 +1094,16 @@ const TIER_LABELS=[
 function normPlayer(p){
   const words = p.name.split(' ');
   const ini = words.map(w=>w[0]).join('').substring(0,3).toUpperCase();
-  const stats = (p.role==='BAT'||p.role==='WK') ? {avg:'-',sr:'-'} : {wkts:'-',eco:'-'};
+  // Build stats from DB columns — fallback to '-' if null
+  const stats = (p.role==='BAT'||p.role==='WK')
+    ? { avg: p.batting_avg  ? parseFloat(p.batting_avg).toFixed(1)  : '-',
+        sr:  p.batting_sr   ? parseFloat(p.batting_sr).toFixed(1)   : '-' }
+    : (p.role==='AR')
+    ? { avg: p.batting_avg  ? parseFloat(p.batting_avg).toFixed(1)  : '-',
+        wkts:p.bowling_wkts ? parseInt(p.bowling_wkts)              : '-',
+        eco: p.bowling_eco  ? parseFloat(p.bowling_eco).toFixed(2)  : '-' }
+    : { wkts:p.bowling_wkts ? parseInt(p.bowling_wkts)              : '-',
+        eco: p.bowling_eco  ? parseFloat(p.bowling_eco).toFixed(2)  : '-' };
   return {id:p.id, n:p.name, t:p.ipl_team_code, r:p.role, ini, base:parseFloat(p.base_price), stats, set:parseInt(p.auction_set||1), nat:p.nationality||null};
 }
 function normSquadRow(s){
@@ -1111,7 +1120,7 @@ async function sbGetPlayers(role){
   // Fetch players — no active/season filter to avoid missing rows.
   // Relies on RLS: players_select_all policy must be enabled for authenticated users.
   let q = sb.from('players')
-    .select('id,name,ipl_team_code,role,base_price,auction_set,nationality')
+    .select('id,name,ipl_team_code,role,base_price,auction_set,nationality,batting_avg,batting_sr,bowling_wkts,bowling_eco')
     .order('auction_set',{ascending:true})
     .order('base_price',{ascending:false});
   if(role && role!=='ALL') q = q.eq('role',role);
@@ -2503,8 +2512,19 @@ function updateAucTimerUI(){
   if(mf){mf.style.strokeDashoffset=offset;mf.style.stroke=stroke;}
 }
 function buildStats(p){
-  if(p.r==='BAT'||p.r==='WK')return`<div class="sp-stat"><div class="sp-sv" style="color:var(--accent)">${p.stats.avg||'-'}</div><div class="sp-sl">Avg</div></div><div class="sp-stat"><div class="sp-sv" style="color:var(--gold)">${p.stats.sr||'-'}</div><div class="sp-sl">SR</div></div>`;
-  return`<div class="sp-stat"><div class="sp-sv" style="color:var(--red)">${p.stats.wkts||'-'}</div><div class="sp-sl">Wkts</div></div><div class="sp-stat"><div class="sp-sv" style="color:var(--green)">${p.stats.eco||'-'}</div><div class="sp-sl">Eco</div></div>`;
+  const s=p.stats||{};
+  if(p.r==='BAT'||p.r==='WK'){
+    return`<div class="sp-stat"><div class="sp-sv" style="color:var(--accent)">${s.avg||'-'}</div><div class="sp-sl">Avg</div></div>`
+          +`<div class="sp-stat"><div class="sp-sv" style="color:var(--gold)">${s.sr||'-'}</div><div class="sp-sl">SR</div></div>`;
+  }
+  if(p.r==='AR'){
+    return`<div class="sp-stat"><div class="sp-sv" style="color:var(--accent)">${s.avg||'-'}</div><div class="sp-sl">Avg</div></div>`
+          +`<div class="sp-stat"><div class="sp-sv" style="color:var(--red)">${s.wkts||'-'}</div><div class="sp-sl">Wkts</div></div>`
+          +`<div class="sp-stat"><div class="sp-sv" style="color:var(--green)">${s.eco||'-'}</div><div class="sp-sl">Eco</div></div>`;
+  }
+  // Bowler
+  return`<div class="sp-stat"><div class="sp-sv" style="color:var(--red)">${s.wkts||'-'}</div><div class="sp-sl">Wkts</div></div>`
+        +`<div class="sp-stat"><div class="sp-sv" style="color:var(--green)">${s.eco||'-'}</div><div class="sp-sl">Eco</div></div>`;
 }
 function renderAucCenter(p){
   const c=document.getElementById('auc-center');
@@ -3625,8 +3645,11 @@ function renderMgrSpotlight(){
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">${p.t} · ${RN[p.r]||p.r}</div>
         <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:1px;line-height:1">${p.n}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:2px">
-          ${p.nat&&p.nat!=='India'?'<span style="color:var(--accent)">✈ '+p.nat+'</span>':'🇮🇳 India'}
+          ${p.nat&&p.nat!=='India'
+            ?'<span style="color:var(--accent)">✈ '+p.nat+'</span>'
+            :'🇮🇳 '+(p.nat||'India')}
         </div>
+        <div class="sp-stats" style="margin-top:6px">${buildStats(p)}</div>
       </div>
       <div class="timer-ring" style="flex-shrink:0">
         <svg width="56" height="56" viewBox="0 0 64 64">
