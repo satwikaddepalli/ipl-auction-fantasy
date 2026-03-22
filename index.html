@@ -1095,7 +1095,7 @@ function normPlayer(p){
   const words = p.name.split(' ');
   const ini = words.map(w=>w[0]).join('').substring(0,3).toUpperCase();
   const stats = (p.role==='BAT'||p.role==='WK') ? {avg:'-',sr:'-'} : {wkts:'-',eco:'-'};
-  return {id:p.id, n:p.name, t:p.ipl_team_code, r:p.role, ini, base:parseFloat(p.base_price), stats, set:parseInt(p.auction_set||1), nat:p.nationality||'India'};
+  return {id:p.id, n:p.name, t:p.ipl_team_code, r:p.role, ini, base:parseFloat(p.base_price), stats, set:parseInt(p.auction_set||1), nat:p.nationality||null};
 }
 function normSquadRow(s){
   const words = s.players.name.split(' ');
@@ -2284,6 +2284,20 @@ function qdrop(e,t){e.preventDefault();if(aucDragSrc===null||aucDragSrc===t)retu
 function qdragEnd(){document.querySelectorAll('.qi').forEach(r=>{r.classList.remove('dragging');r.classList.remove('drag-over');});aucDragSrc=null;}
 
 /* ── IPL Team Colours ── */
+
+const IPL_LOGOS = {
+  MI:  'https://scores.iplt20.com/ipl/teamlogos/MI.png',
+  CSK: 'https://scores.iplt20.com/ipl/teamlogos/CSK.png',
+  RCB: 'https://scores.iplt20.com/ipl/teamlogos/RCB.png',
+  KKR: 'https://scores.iplt20.com/ipl/teamlogos/KKR.png',
+  DC:  'https://scores.iplt20.com/ipl/teamlogos/DC.png',
+  PBKS:'https://scores.iplt20.com/ipl/teamlogos/PBKS.png',
+  RR:  'https://scores.iplt20.com/ipl/teamlogos/RR.png',
+  SRH: 'https://scores.iplt20.com/ipl/teamlogos/SRH.png',
+  GT:  'https://scores.iplt20.com/ipl/teamlogos/GT.png',
+  LSG: 'https://scores.iplt20.com/ipl/teamlogos/LSG.png',
+};
+
 const IPL_TEAM_COLORS = {
   MI:  { bg:'#004BA0', accent:'#5BB8F5', ring:'#002D6B' },
   CSK: { bg:'#F9CD05', accent:'#1A1A1A', ring:'#C9A500' },
@@ -2298,19 +2312,28 @@ const IPL_TEAM_COLORS = {
 };
 
 function iplTeamAvatar(teamCode, size=64, fontSize=16){
-  const tc = IPL_TEAM_COLORS[teamCode] || { bg:'#1a2740', accent:'#F5A623', ring:'#0d1421' };
+  const tc  = IPL_TEAM_COLORS[teamCode] || {bg:'#1a2740',accent:'#F5A623',ring:'#0d1421'};
+  const logo = IPL_LOGOS[teamCode];
+  const pad  = Math.round(size * 0.1);
+  // Outer ring uses team colours; inner shows logo (with text fallback)
   return `<div style="
     width:${size}px;height:${size}px;border-radius:50%;flex-shrink:0;
     background:${tc.bg};
     border:3px solid ${tc.ring};
-    box-shadow:0 0 0 2px ${tc.accent}33, 0 4px 12px rgba(0,0,0,.4);
+    box-shadow:0 0 0 2px ${tc.accent}55,0 4px 16px rgba(0,0,0,.5);
     display:flex;align-items:center;justify-content:center;
-    font-family:'Bebas Neue',sans-serif;
-    font-size:${fontSize}px;
-    color:${tc.accent};
-    letter-spacing:1px;
-    font-weight:700;
-  ">${teamCode}</div>`;
+    overflow:hidden;position:relative;
+  ">
+    ${logo?`
+      <img src="${logo}" alt="${teamCode}"
+        style="width:${size-pad*2}px;height:${size-pad*2}px;object-fit:contain;object-position:center"
+        onerror="this.style.display='none';this.nextSibling.style.display='flex'"/>
+      <div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;
+        font-family:'Bebas Neue',sans-serif;font-size:${fontSize}px;color:${tc.accent};
+        letter-spacing:1px;font-weight:700;">${teamCode}</div>`
+    :`<div style="font-family:'Bebas Neue',sans-serif;font-size:${fontSize}px;
+        color:${tc.accent};letter-spacing:1px;font-weight:700;">${teamCode}</div>`}
+  </div>`;
 }
 // AUCTION ENGINE
 async function nextPlayer(){
@@ -2497,7 +2520,7 @@ function renderAucCenter(p){
         ${iplTeamAvatar(p.t, 64, 18)}
         <div>
           <div class="sp-name">${p.n}</div>
-          <div class="sp-sub">${p.t} · ${RN[p.r]} · ${(p.nat&&p.nat!=='India')?'✈ '+p.nat:p.nat||'India'}</div>
+          <div class="sp-sub">${p.t} · ${RN[p.r]} · ${p.nat&&p.nat!=='India'?'✈ '+p.nat:(p.nat?p.nat:'India')}</div>
           <div class="sp-stats">${buildStats(p)}</div>
         </div>
       </div>
@@ -3443,7 +3466,7 @@ async function refreshMgrCurrentPlayer(){
     t:    p.t    || p.ipl_team_code,
     r:    p.r    || p.role,
     base: parseFloat(p.base || p.base_price || 1),
-    nat:  p.nat || p.nationality || 'India',
+    nat:  p.nat || p.nationality || null,
     ini:  p.ini  || (p.n||p.name||'?').split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()
   };
 
@@ -3602,7 +3625,7 @@ function renderMgrSpotlight(){
         <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px">${p.t} · ${RN[p.r]||p.r}</div>
         <div style="font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:1px;line-height:1">${p.n}</div>
         <div style="font-size:11px;color:var(--muted);margin-top:2px">
-          ${(p.nat&&p.nat!=='India')?'<span style="color:var(--accent)">✈ '+p.nat+'</span>':'🇮🇳 '+( p.nat||'India')}
+          ${p.nat&&p.nat!=='India'?'<span style="color:var(--accent)">✈ '+p.nat+'</span>':'🇮🇳 India'}
         </div>
       </div>
       <div class="timer-ring" style="flex-shrink:0">
