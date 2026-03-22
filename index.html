@@ -2512,7 +2512,12 @@ function updateAucTimerUI(){
   if(mf){mf.style.strokeDashoffset=offset;mf.style.stroke=stroke;}
 }
 function buildStats(p){
-  const s=p.stats||{};
+  const s = p.stats||{};
+  const hasAny = s.avg||s.sr||s.wkts||s.eco;
+  // If no stats yet loaded, show base price as the only stat
+  if(!hasAny){
+    return`<div class="sp-stat"><div class="sp-sv" style="color:var(--gold)">₹${p.base}cr</div><div class="sp-sl">Base</div></div>`;
+  }
   if(p.r==='BAT'||p.r==='WK'){
     return`<div class="sp-stat"><div class="sp-sv" style="color:var(--accent)">${s.avg||'-'}</div><div class="sp-sl">Avg</div></div>`
           +`<div class="sp-stat"><div class="sp-sv" style="color:var(--gold)">${s.sr||'-'}</div><div class="sp-sl">SR</div></div>`;
@@ -2522,7 +2527,6 @@ function buildStats(p){
           +`<div class="sp-stat"><div class="sp-sv" style="color:var(--red)">${s.wkts||'-'}</div><div class="sp-sl">Wkts</div></div>`
           +`<div class="sp-stat"><div class="sp-sv" style="color:var(--green)">${s.eco||'-'}</div><div class="sp-sl">Eco</div></div>`;
   }
-  // Bowler
   return`<div class="sp-stat"><div class="sp-sv" style="color:var(--red)">${s.wkts||'-'}</div><div class="sp-sl">Wkts</div></div>`
         +`<div class="sp-stat"><div class="sp-sv" style="color:var(--green)">${s.eco||'-'}</div><div class="sp-sl">Eco</div></div>`;
 }
@@ -3487,7 +3491,8 @@ async function refreshMgrCurrentPlayer(){
     r:    p.r    || p.role,
     base: parseFloat(p.base || p.base_price || 1),
     nat:  p.nat || p.nationality || null,
-    ini:  p.ini  || (p.n||p.name||'?').split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()
+    ini:  p.ini  || (p.n||p.name||'?').split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase(),
+    stats: p.stats || {}
   };
 
   // Current bid from state
@@ -3986,7 +3991,9 @@ function subscribeToMgrAuction(){
           mgrAucState.currentPlayer = {
             id:qp.id, n:qp.n, t:qp.t, r:qp.r,
             base:parseFloat(qp.base||qp.base_price||1),
-            ini:qp.ini||(qp.n||'').split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase()
+            nat: qp.nat||null,
+            ini:qp.ini||(qp.n||'').split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase(),
+            stats: qp.stats || {}
           };
           mgrAucState.currentBid         = parseFloat(st.bid||qp.base||1);
           mgrAucState.currentBidder      = st.top||null;
