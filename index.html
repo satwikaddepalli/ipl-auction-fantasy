@@ -2593,6 +2593,215 @@ function addLog(type,text){
   const body=document.getElementById('log-body');if(!body)return;
   body.innerHTML=aucLogs.slice(0,60).map(l=>`<div class="le ${l.type}"><div>${l.text}</div><div class="le-time">${l.time}</div></div>`).join('');
 }
+
+// ── SCORING ENGINE ──────────────────────────────────────────
+
+// Jaro-Winkler similarity for fuzzy player name matching
+function jaroSimilarity(s1, s2){
+  if(s1===s2) return 1;
+  const l1=s1.length, l2=s2.length;
+  const matchDist=Math.floor(Math.max(l1,l2)/2)-1;
+  let matches=0, transpositions=0;
+  const s1Matches=new Array(l1).fill(false);
+  const s2Matches=new Array(l2).fill(false);
+  for(let i=0;i<l1;i++){
+    const lo=Math.max(0,i-matchDist), hi=Math.min(i+matchDist+1,l2);
+    for(let j=lo;j<hi;j++){
+      if(!s2Matches[j]&&s1[i]===s2[j]){s1Matches[i]=true;s2Matches[j]=true;matches++;break;}
+    }
+  }
+  if(!matches) return 0;
+  let k=0;
+  for(let i=0;i<l1;i++){
+    if(s1Matches[i]){while(!s2Matches[k])k++;if(s1[i]!==s2[k])transpositions++;k++;}}
+  return (matches/l1+matches/l2+(matches-transpositions/2)/matches)/3;
+}
+
+function jaroWinkler(s1, s2, p=0.1){
+  const jaro=jaroSimilarity(s1,s2);
+  let prefix=0;
+  for(let i=0;i<Math.min(4,s1.length,s2.length);i++){
+    if(s1[i]===s2[i]) prefix++; else break;
+  }
+  return jaro+prefix*p*(1-jaro);
+}
+
+function normaliseName(name){
+  return name.toLowerCase()
+    .replace(/[^a-z ]/g,'')
+    .replace(/\b(the|a|an|sr|jr|ii|iii)\b/g,'')
+    .replace(/  +/g,' ').trim();
+}
+
+// Find best matching player from our DB list by fuzzy name match
+function fuzzyMatchPlayer(cricName, playerList, threshold=0.82){
+  const norm = normaliseName(cricName);
+  let best=null, bestScore=0;
+  for(const p of playerList){
+    const score = jaroWinkler(norm, normaliseName(p.n||p.name||''));
+    if(score>bestScore){ bestScore=score; best=p; }
+  }
+  return bestScore>=threshold ? {player:best, score:bestScore} : null;
+}
+
+// Fantasy points calculation (standard IPL fantasy scoring)
+function calcFantasyPoints(perf, role){
+  let pts = 0;
+  const r = perf.runs||0, b=perf.balls||0;
+  const w = perf.wickets||0, eco=perf.economy||0;
+  const ct=perf.catches||0, st=perf.stumpings||0, ro=perf.run_outs||0;
+
+  // Batting
+  if(r>0){
+    pts += r;                                    // 1pt per run
+    if(r>=100) pts+=16; else if(r>=75) pts+=12;
+    else if(r>=50) pts+=8; else if(r>=25) pts+=4;
+    if(b>0&&(r/b)*100>=170) pts+=6;             // SR bonus
+    else if(b>0&&(r/b)*100>=150) pts+=4;
+    else if(b>0&&(r/b)*100>=130) pts+=2;
+    if(r===0&&b>0) pts-=2;                      // duck
+  }
+  // Bowling
+  pts += w*25;                                   // 25pts per wicket
+  if(w>=5) pts+=16; else if(w>=4) pts+=8; else if(w>=3) pts+=4;
+  if(eco>0&&eco<5) pts+=6; else if(eco<6) pts+=4; else if(eco<7) pts+=2;
+  else if(eco>10) pts-=2; else if(eco>9) pts-=2;
+  if(perf.maidens) pts+=4*perf.maidens;
+
+  // Fielding
+  pts += ct*8 + st*12 + ro*6;
+
+  return pts;
+}
+
+// Fetch match scorecard from CricAPI and score players
+async function scoreMatchFromCricAPI(matchId, cricApiMatchId, leagueId){
+  const CRIC_API_KEY = window.CRICAPI_KEY || '';
+  if(!CRIC_API_KEY){
+    showToast('CricAPI key not set. Add it in Settings.','error'); return;
+  }
+
+  showToast('Fetching scorecard for Match '+matchId+'...','info');
+
+  try{
+    // Fetch scorecard
+    const res = await fetch(
+      'https://api.cricapi.com/v1/match_scorecard?apikey='+CRIC_API_KEY+'&id='+cricApiMatchId
+    );
+    const json = await res.json();
+    if(!json.status==='success'||!json.data){
+      showToast('CricAPI error: '+(json.message||'unknown'),'error'); return;
+    }
+
+    const scorecard = json.data;
+    // Load all players from DB for fuzzy matching
+    const {data:allPlayers} = await sb.from('players').select('id,name');
+    if(!allPlayers?.length){ showToast('No players in DB to match','error'); return; }
+
+    // Parse innings and build performance map
+    const perfMap = {}; // player_id → perf object
+
+    for(const inning of (scorecard.scorecard||[])){
+      // Batting
+      for(const bat of (inning.batting||[])){
+        const match = fuzzyMatchPlayer(bat.batsman?.name||bat.name||'', allPlayers);
+        if(!match) continue;
+        const pid = match.player.id;
+        if(!perfMap[pid]) perfMap[pid]={runs:0,balls:0,wickets:0,economy:0,catches:0,stumpings:0,run_outs:0,maidens:0};
+        perfMap[pid].runs   += parseInt(bat.r||0);
+        perfMap[pid].balls  += parseInt(bat.b||0);
+        perfMap[pid].fours  = (perfMap[pid].fours||0)+parseInt(bat['4s']||0);
+        perfMap[pid].sixes  = (perfMap[pid].sixes||0)+parseInt(bat['6s']||0);
+        if(bat.dismissal?.toLowerCase().includes('duck')||
+          (parseInt(bat.r||0)===0&&parseInt(bat.b||0)>0)) perfMap[pid].duck=true;
+      }
+      // Bowling
+      for(const bwl of (inning.bowling||[])){
+        const match = fuzzyMatchPlayer(bwl.bowler?.name||bwl.name||'', allPlayers);
+        if(!match) continue;
+        const pid = match.player.id;
+        if(!perfMap[pid]) perfMap[pid]={runs:0,balls:0,wickets:0,economy:0,catches:0,stumpings:0,run_outs:0,maidens:0};
+        perfMap[pid].wickets  += parseInt(bwl.w||0);
+        perfMap[pid].maidens  += parseInt(bwl.m||0);
+        const overs = parseFloat(bwl.o||0);
+        const runsConceded = parseInt(bwl.r||0);
+        if(overs>0) perfMap[pid].economy = runsConceded/overs;
+      }
+      // Fielding (catches/stumpings from dismissal info)
+      for(const bat of (inning.batting||[])){
+        const dis = bat.dismissal||'';
+        const ctMatch = dis.match(/c\s+(.+?)\s+b/i);
+        const stMatch = dis.match(/st\s+(.+?)\s+b/i);
+        if(ctMatch){
+          const fm=fuzzyMatchPlayer(ctMatch[1].trim(),allPlayers);
+          if(fm) perfMap[fm.player.id]=(perfMap[fm.player.id]||{catches:0,stumpings:0,run_outs:0,runs:0,balls:0,wickets:0,economy:0,maidens:0}),
+            perfMap[fm.player.id].catches=(perfMap[fm.player.id].catches||0)+1;
+        }
+        if(stMatch){
+          const fm=fuzzyMatchPlayer(stMatch[1].trim(),allPlayers);
+          if(fm) perfMap[fm.player.id]=(perfMap[fm.player.id]||{catches:0,stumpings:0,run_outs:0,runs:0,balls:0,wickets:0,economy:0,maidens:0}),
+            perfMap[fm.player.id].stumpings=(perfMap[fm.player.id].stumpings||0)+1;
+        }
+      }
+    }
+
+    // Load squads locked for this match (all squads in league)
+    const {data:squads} = await sb.from('squads')
+      .select('user_id,player_id,is_captain,is_vc,is_xi').eq('league_id',leagueId);
+
+    // Calculate and save fantasy points
+    const perfRows = [];
+    for(const [pidStr, perf] of Object.entries(perfMap)){
+      const pid = parseInt(pidStr);
+      const {data:pRow} = await sb.from('players').select('role').eq('id',pid).single();
+      const pts = calcFantasyPoints(perf, pRow?.role||'BAT');
+      perfRows.push({
+        match_id:matchId, player_id:pid, league_id:leagueId,
+        runs:perf.runs||0, balls_faced:perf.balls||0,
+        fours:perf.fours||0, sixes:perf.sixes||0,
+        wickets:perf.wickets||0, maidens:perf.maidens||0,
+        economy:perf.economy||0, catches:perf.catches||0,
+        stumpings:perf.stumpings||0, run_outs:perf.run_outs||0,
+        is_duck:perf.duck||false, fantasy_pts:pts
+      });
+    }
+
+    // Save to player_performances table
+    if(perfRows.length){
+      await sb.from('player_performances')
+        .upsert(perfRows,{onConflict:'match_id,player_id,league_id',ignoreDuplicates:false});
+    }
+
+    // Update gw_scores for each manager
+    const matchRow = FIXTURES_DATA.find(f=>f.matchNo===matchId)||{};
+    const gwNum = matchId; // using match id as the score key
+
+    const scoresByMgr = {};
+    for(const sq of (squads||[])){
+      if(!sq.is_xi) continue;
+      const perf = perfMap[sq.player_id];
+      if(!perf) continue;
+      const pts = calcFantasyPoints(perf, 'BAT');
+      const multi = sq.is_captain?2:sq.is_vc?1.5:1;
+      if(!scoresByMgr[sq.user_id]) scoresByMgr[sq.user_id]=0;
+      scoresByMgr[sq.user_id] += Math.round(pts*multi);
+    }
+
+    for(const [uid, pts] of Object.entries(scoresByMgr)){
+      await sb.from('gw_scores').upsert({
+        league_id:leagueId, user_id:uid, gw:gwNum, points:pts
+      },{onConflict:'league_id,user_id,gw'});
+    }
+
+    showToast('Match '+matchId+' scored · '+perfRows.length+' players · '+Object.keys(scoresByMgr).length+' managers updated','success');
+    return { performances:perfRows, managerScores:scoresByMgr };
+
+  }catch(err){
+    console.error('scoreMatchFromCricAPI error:', err);
+    showToast('Scoring failed: '+err.message,'error');
+  }
+}
+
 function sbTab(tab,el){sbCurrentTab=tab;renderSB(tab);}
 function renderSB(tab){
   const body=document.getElementById('sb-content');
@@ -2601,7 +2810,23 @@ function renderSB(tab){
   if(tab==='overview'){
     body.innerHTML=`<div class="sb-grid">${aucMgrs.map(m=>{const sp=m.squad.reduce((s,p)=>s+p.soldPrice,0);const top=m.squad.reduce((b,p)=>(!b||p.soldPrice>b.soldPrice)?p:b,null);return`<div class="sb-card"><div class="sb-card-hdr"><div class="sb-av ${m.av}">${m.ini}</div><div><div style="font-size:13px;font-weight:600">${m.name}</div><div style="font-size:10px;color:var(--muted)">${m.squad.length}/${aucConfig.squad} players</div></div></div><div class="sb-stats"><div class="sb-stat"><div class="sv" style="color:var(--red)">₹${parseFloat(sp.toFixed(1))}</div><div class="sl">Spent</div></div><div class="sb-stat"><div class="sv" style="color:var(--green)">₹${parseFloat(m.budget.toFixed(1))}</div><div class="sl">Left</div></div><div class="sb-stat"><div class="sv" style="color:var(--gold)">${m.squad.length}</div><div class="sl">Players</div></div></div>${top?`<div style="padding:6px 10px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Top: <strong style="color:var(--text)">${top.n}</strong> @ ₹${top.soldPrice}cr</div>`:''}<div style="padding:6px">${m.squad.slice(0,4).map(p=>`<div class="sb-sq-row"><div class="sb-sq-av ${RC[p.r]}">${p.ini}</div><span style="font-size:10px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.n}</span><span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold)">₹${p.soldPrice}</span></div>`).join('')}${m.squad.length>4?`<div style="font-size:9px;color:var(--muted);padding:2px 5px">+${m.squad.length-4} more</div>`:''}</div></div>`;}).join('')}</div>`;
   }else{
-    body.innerHTML=`<div class="sb-grid">${aucMgrs.map(m=>`<div class="sb-card"><div class="sb-card-hdr"><div class="sb-av ${m.av}">${m.ini}</div><div><div style="font-size:13px;font-weight:600">${m.name}</div><div style="font-size:10px;color:var(--muted)">₹${m.budget}cr left</div></div></div><div style="padding:6px">${m.squad.length?m.squad.map(p=>`<div class="sb-sq-row"><div class="sb-sq-av ${RC[p.r]}">${p.ini}</div><span style="font-size:10px;flex:1">${p.n}</span><span style="font-size:9px;color:var(--muted);padding:1px 4px;background:var(--s2);border-radius:3px">${p.r}</span><span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold)">₹${p.soldPrice}</span></div>`).join(''):'<div style="padding:8px;font-size:11px;color:var(--muted)">No players yet</div>'}</div></div>`).join('')}</div>`;
+    body.innerHTML=`<div class="sb-grid">${aucMgrs.map(m=>`<div class="sb-card">
+      <div class="sb-card-hdr">
+        <div class="sb-av ${m.av}">${m.ini}</div>
+        <div><div style="font-size:13px;font-weight:600">${m.name}</div>
+        <div style="font-size:10px;color:var(--muted)">₹${m.budget}cr left · ${m.squad.length} players</div></div>
+      </div>
+      <div style="padding:6px">${m.squad.length
+        ? m.squad.map(p=>`<div class="sb-sq-row" style="justify-content:space-between">
+            <div class="sb-sq-av ${RC[p.r]}">${p.ini}</div>
+            <span style="font-size:10px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.n}</span>
+            <span style="font-size:9px;color:var(--muted);padding:1px 4px;background:var(--s2);border-radius:3px;flex-shrink:0">${p.r}</span>
+            <span style="font-family:'Bebas Neue',sans-serif;font-size:11px;color:var(--gold);flex-shrink:0">₹${p.soldPrice}cr</span>
+            <button onclick="adminTransferOut('${m.id}','${m.name}',${p.id},'${p.n.replace(/'/g,"'")}',${p.soldPrice})"
+              style="font-size:9px;padding:2px 6px;background:rgba(255,77,109,.15);border:1px solid rgba(255,77,109,.4);color:var(--red);border-radius:4px;cursor:pointer;flex-shrink:0;margin-left:3px">✕ Out</button>
+          </div>`).join('')
+        : '<div style="padding:8px;font-size:11px;color:var(--muted)">No players yet</div>'}
+      </div></div>`).join('')}</div>`;
   }
 }
 
@@ -2720,6 +2945,89 @@ function resumeAuction(){
   showToast('Auction resumed','success');
 }
 
+
+async function adminTransferOut(mgrUserId, mgrName, playerId, playerName, soldPrice){
+  showConfirm(
+    'Transfer Out '+playerName+'?',
+    'Admin transfer — 100% refund (₹'+soldPrice+'cr) returned to '+mgrName+'. Player re-enters auction queue.',
+    async ()=>{
+      showToast('Processing transfer...','info');
+      const lgId = aucConfig.leagueId||controlRoomLeagueId;
+
+      // 1. Remove from squads table
+      const {error:sqErr} = await sb.from('squads')
+        .delete().eq('league_id',lgId).eq('user_id',mgrUserId).eq('player_id',playerId);
+      if(sqErr){ showToast('Transfer failed: '+sqErr.message,'error'); return; }
+
+      // 2. Update aucMgrs in memory — remove player, restore 100% budget
+      const mgr = aucMgrs.find(m=>m.id===mgrUserId);
+      if(mgr){
+        mgr.squad  = mgr.squad.filter(p=>p.id!==playerId);
+        mgr.budget = parseFloat((mgr.budget + soldPrice).toFixed(2));
+      }
+
+      // 3. Update budget_remaining in DB (100% refund)
+      const {data:memRow} = await sb.from('league_members')
+        .select('budget_remaining').eq('league_id',lgId).eq('user_id',mgrUserId).single();
+      const newBudget = parseFloat(((memRow?.budget_remaining||0) + soldPrice).toFixed(2));
+      await sb.from('league_members')
+        .update({budget_remaining:newBudget}).eq('league_id',lgId).eq('user_id',mgrUserId);
+
+      // 4. Add player back to auction queue (Enhancement 3)
+      const {data:aucRow} = await sb.from('auctions')
+        .select('id').eq('league_id',lgId)
+        .order('created_at',{ascending:false}).limit(1).single();
+      if(aucRow){
+        const {data:maxQ} = await sb.from('auction_queue')
+          .select('queue_order').eq('auction_id',aucRow.id)
+          .order('queue_order',{ascending:false}).limit(1).single();
+        const nextOrder = (maxQ?.queue_order||0)+1;
+        await sb.from('auction_queue').insert({
+          auction_id:aucRow.id, player_id:playerId,
+          queue_order:nextOrder, status:'pending'
+        });
+        // Add to in-memory aucQueue so it shows in admin queue sidebar
+        const alreadyIn = aucQueue.find(p=>p.id===playerId);
+        if(!alreadyIn){
+          const {data:pRow} = await sb.from('players')
+            .select('id,name,ipl_team_code,role,base_price,nationality,auction_set,batting_avg,batting_sr,bowling_wkts,bowling_eco')
+            .eq('id',playerId).single();
+          if(pRow){
+            const ini=pRow.name.split(' ').map(w=>w[0]).join('').substring(0,3).toUpperCase();
+            const stats=(pRow.role==='BAT'||pRow.role==='WK')
+              ?{avg:pRow.batting_avg||'-',sr:pRow.batting_sr||'-'}
+              :{wkts:pRow.bowling_wkts||'-',eco:pRow.bowling_eco||'-'};
+            aucQueue.push({
+              id:pRow.id, n:pRow.name, t:pRow.ipl_team_code,
+              r:pRow.role, ini, base:parseFloat(pRow.base_price),
+              nat:pRow.nationality||null, stats,
+              soldTo:null, unsold:false, soldPrice:0, transferredBack:true
+            });
+            renderQueueList();
+          }
+        }
+        // Broadcast to manager screens
+        const broadcastCh = sb.channel('league-transfer-'+lgId);
+        await broadcastCh.subscribe(async (st)=>{
+          if(st==='SUBSCRIBED'){
+            await broadcastCh.send({
+              type:'broadcast', event:'transfer_out',
+              payload:{auctionId:aucRow.id, playerId, playerName, userId:mgrUserId}
+            });
+            setTimeout(()=>sb.removeChannel(broadcastCh),1000);
+          }
+        });
+      }
+
+      // 5. Re-render admin Live Squad
+      renderSB(sbCurrentTab);
+      renderBiddersBar();
+      addLog('sys','Admin transferred out '+playerName+' from '+mgrName+' — ₹'+soldPrice+'cr refunded (100%)');
+      showToast(playerName+' transferred out · ₹'+soldPrice+'cr returned to '+mgrName,'success');
+    }
+  );
+}
+
 function confirmEndAuction(){showConfirm('End Auction?','This will close the auction. Any current player with no bids is marked unsold.',endAuction);}
 function confirmGoHome(){showConfirm('Leave Auction?','The auction will be paused. You can return to it from Home.',()=>{if(aucInterval)clearInterval(aucInterval);goHome();});}
 async function endAuction(){
@@ -2759,13 +3067,21 @@ async function endAuction(){
       acquired_via: 'auction'
     }));
 
-    // Upsert — safe to re-run if endAuction is called twice
+    // First try bulk upsert
     const { error: squadErr } = await sb.from('squads')
       .upsert(squadRows, { onConflict: 'league_id,user_id,player_id', ignoreDuplicates: false });
 
     if(squadErr){
-      console.error('squads insert error for', m.name, ':', squadErr);
-      errorCount++;
+      console.error('Bulk upsert failed for', m.name, '— trying row-by-row:', squadErr.message);
+      // Retry row-by-row so partial saves succeed
+      let rowErrors = 0;
+      for(const row of squadRows){
+        const {error:re} = await sb.from('squads')
+          .upsert(row, {onConflict:'league_id,user_id,player_id', ignoreDuplicates:false});
+        if(re){ console.error('Row error', row.player_id, re.message); rowErrors++; }
+        else savedCount++;
+      }
+      if(rowErrors > 0) errorCount++;
     } else {
       savedCount += squadRows.length;
     }
@@ -3085,9 +3401,21 @@ async function doTransferOut(playerId, playerName, boughtPrice){
         .update({budget_remaining:dbBudget})
         .eq('league_id',CL_ID).eq('user_id',user.id);
 
-      // FIX 4: Update stat cards
+      // Update ALL purse display elements
+      document.getElementById('d-budget').textContent=dbBudget;
       const scBudget=document.getElementById('sc-budget');
       if(scBudget) scBudget.textContent='₹'+dbBudget+'cr';
+      const scBudgetSub=document.getElementById('sc-budget-sub');
+      if(scBudgetSub){
+        const spent=squad.filter(p=>p.id!==playerId).reduce((s,p)=>s+parseFloat(p.price||0),0);
+        scBudgetSub.textContent='₹'+parseFloat(spent.toFixed(1))+'cr spent';
+      }
+      // Update auction tab purse display
+      const mgrBudgetDisp=document.getElementById('mgr-budget-disp');
+      if(mgrBudgetDisp) mgrBudgetDisp.textContent=dbBudget;
+      // Update league tab budget display
+      const lg=CL_ID?LEAGUES_DB.find(x=>x.id===CL_ID):null;
+      if(lg){ lg.budget=dbBudget; }
 
       // 4. Push player back into auction_queue
       //    Find the auction for this league (any non-setup status)
